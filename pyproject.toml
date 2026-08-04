@@ -21,5 +21,10 @@ ignore = [
     "RUF003",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Скрипты ручной проверки моделей запускаются из каталога scripts/ и должны
+# сначала добавить корень репозитория в путь, а уже потом импортировать app.
+"scripts/*" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
