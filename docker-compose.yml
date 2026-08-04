@@ -1,7 +1,10 @@
 services:
   support-ai:
+    # На сервере тянем готовый образ из GHCR, локально можно собрать:
+    #   docker compose build
+    image: ${IMAGE:-ghcr.io/airp0wer/bedolada-support:latest}
     build: .
-    container_name: bedolaga-support
+    container_name: bedolada-support
     restart: unless-stopped
     env_file: .env
     volumes:
@@ -12,10 +15,15 @@ services:
       - ./kb:/srv/kb:ro
     networks:
       - bot
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 
 networks:
-  # Сеть, в которой живёт контейнер бедолаги — имя уточняется на шаге
-  # настройки доступа (docker network ls на wave-tg).
+  # Сеть, в которой живёт контейнер бедолаги. Имя смотрится на сервере:
+  #   docker inspect <контейнер_бота> -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
   bot:
     external: true
     name: ${BOT_NETWORK:-remnawave-bot_default}
