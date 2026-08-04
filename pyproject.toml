@@ -1,0 +1,25 @@
+[project]
+name = "bedolada-support"
+version = "0.1.0"
+description = "ИИ-автоответчик на тикеты встроенной поддержки бота bedolaga"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    # Кириллица в идентификаторах тестов — осознанно: имена тестов читаются
+    # как описание правила.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

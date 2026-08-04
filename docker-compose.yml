@@ -1,0 +1,21 @@
+services:
+  support-ai:
+    build: .
+    container_name: bedolaga-support
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Состояние переживает пересоздание контейнера. Без этого сервис
+      # забудет, что уже отвечал и что уже эскалировал.
+      - ./data:/data
+      # База знаний правится без пересборки образа.
+      - ./kb:/srv/kb:ro
+    networks:
+      - bot
+
+networks:
+  # Сеть, в которой живёт контейнер бедолаги — имя уточняется на шаге
+  # настройки доступа (docker network ls на wave-tg).
+  bot:
+    external: true
+    name: ${BOT_NETWORK:-remnawave-bot_default}
