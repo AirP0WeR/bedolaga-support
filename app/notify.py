@@ -99,6 +99,10 @@ class Notifier:
             lines.append(f'Ошибок модели: {digest.llm_errors}')
         if digest.avg_confidence is not None:
             lines.append(f'Средняя уверенность: {digest.avg_confidence:.2f}')
+        if digest.prompt_tokens or digest.completion_tokens:
+            cached = f' (из них {digest.cached_tokens:,} из кеша)'.replace(',', ' ') if digest.cached_tokens else ''
+            lines.append(f'Токенов на вход: {digest.prompt_tokens:,}{cached}'.replace(',', ' '))
+            lines.append(f'Токенов на выход: {digest.completion_tokens:,}'.replace(',', ' '))
         if digest.topics:
             lines.append('')
             lines.append('<b>Темы:</b>')

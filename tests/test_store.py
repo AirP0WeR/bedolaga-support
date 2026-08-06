@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.llm import Usage
 from app.store import Store
 
 LONG_AGO = datetime(2000, 1, 1, tzinfo=UTC)
@@ -133,3 +135,40 @@ def test_ошибки_модели_видны_в_сводке():
     store.audit(1, 'llm_error', reason='модель недоступна')
 
     assert store.counters(LONG_AGO).llm_errors == 1
+
+
+def test_токены_копятся_в_сводке():
+    store = Store(':memory:')
+    store.audit(1, 'answer', usage=Usage(prompt_tokens=1000, completion_tokens=120, cached_tokens=900))
+    store.audit(2, 'escalate', usage=Usage(prompt_tokens=1000, completion_tokens=30, cached_tokens=980))
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.prompt_tokens, digest.completion_tokens, digest.cached_tokens) == (2000, 150, 1880)
+
+
+def test_аудит_без_расхода_токенов_не_ломается():
+    store = Store(':memory:')
+    store.audit(1, 'handover', reason='человек в тикете')
+    assert store.counters(LONG_AGO).prompt_tokens == 0
+
+
+def test_старая_база_дополняется_колонками(tmp_path):
+    """У людей на серверах база от прошлой версии — она должна открыться."""
+    path = str(tmp_path / 'state.db')
+    old = sqlite3.connect(path)
+    old.executescript(
+        'CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, ticket_id INTEGER NOT NULL, '
+        'action TEXT NOT NULL, question TEXT, reply TEXT, reason TEXT, confidence REAL, topic TEXT, model TEXT, '
+        "shadow INTEGER NOT NULL DEFAULT 0); INSERT INTO audit (ts, ticket_id, action) VALUES ('2000-01-02', 1, "
+        "'answer');"
+    )
+    old.commit()
+    old.close()
+
+    store = Store(path)
+    store.audit(2, 'answer', usage=Usage(prompt_tokens=10, completion_tokens=5))
+
+    digest = store.counters(LONG_AGO)
+    assert digest.answered == 2  # старая запись никуда не делась
+    assert digest.prompt_tokens == 10

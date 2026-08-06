@@ -137,7 +137,13 @@ class Service:
         self.alerts.success(LLM, now=time.monotonic())
 
         if not verdict.is_answer:
-            self._escalate(ticket_id, question=question, reason=verdict.reason, topic=verdict.topic)
+            self._escalate(
+                ticket_id,
+                question=question,
+                reason=verdict.reason,
+                topic=verdict.topic,
+                usage=verdict.usage,
+            )
             self.store.set_last_decided(ticket_id, last_message_id)
             return
 
@@ -152,6 +158,7 @@ class Service:
                 topic=verdict.topic,
                 model=self.provider.model,
                 shadow=True,
+                usage=verdict.usage,
             )
             self.notifier.answered(
                 ticket_id,
@@ -191,6 +198,7 @@ class Service:
             confidence=verdict.confidence,
             topic=verdict.topic,
             model=self.provider.model,
+            usage=verdict.usage,
         )
         self.notifier.answered(
             ticket_id,
@@ -202,10 +210,19 @@ class Service:
         )
         log.info('Тикет %s: ответили (сообщение %s)', ticket_id, message_id)
 
-    def _escalate(self, ticket_id: int, *, question: str, reason: str, topic: str = '') -> None:
+    def _escalate(
+        self,
+        ticket_id: int,
+        *,
+        question: str,
+        reason: str,
+        topic: str = '',
+        usage: llm.Usage | None = None,
+    ) -> None:
         self.api.set_priority(ticket_id, 'high')
         self.store.mark_escalated(ticket_id)
-        self.store.audit(ticket_id, 'escalate', question=question, reason=reason, topic=topic)
+        # Токены на эскалацию тоже потрачены — иначе расход в сводке занижен.
+        self.store.audit(ticket_id, 'escalate', question=question, reason=reason, topic=topic, usage=usage)
         self.notifier.escalated(ticket_id, question=question, reason=reason)
         log.info('Тикет %s: передан оператору (%s)', ticket_id, reason)
 

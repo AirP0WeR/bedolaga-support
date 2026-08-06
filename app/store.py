@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .gate import TicketState
+from .llm import Usage
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,9 @@ class Digest:
     llm_errors: int = 0
     avg_confidence: float | None = None
     topics: tuple[tuple[str, int], ...] = field(default_factory=tuple)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
 
 
 SCHEMA = """
@@ -59,6 +63,14 @@ CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
 CREATE INDEX IF NOT EXISTS audit_ticket ON audit (ticket_id);
 """
 
+# Колонки, добавленные после первого релиза. База переживает пересоздание
+# контейнера, поэтому у людей на серверах она старая — досыпаем на открытии.
+MIGRATIONS = (
+    ('audit', 'prompt_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+    ('audit', 'completion_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+    ('audit', 'cached_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+)
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -72,6 +84,13 @@ class Store:
         self._db.row_factory = sqlite3.Row
         self._db.execute('PRAGMA journal_mode=WAL')
         self._db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        for table, column, definition in MIGRATIONS:
+            existing = {row['name'] for row in self._db.execute(f'PRAGMA table_info({table})')}
+            if column not in existing:
+                self._db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
 
     def close(self) -> None:
         self._db.close()
@@ -171,11 +190,28 @@ class Store:
         topic: str = '',
         model: str = '',
         shadow: bool = False,
+        usage: Usage | None = None,
     ) -> None:
+        usage = usage or Usage()
         self._db.execute(
-            'INSERT INTO audit (ts, ticket_id, action, question, reply, reason, confidence, topic, model, shadow) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (_now(), ticket_id, action, question, reply, reason, confidence, topic, model, int(shadow)),
+            'INSERT INTO audit (ts, ticket_id, action, question, reply, reason, confidence, topic, model, shadow, '
+            'prompt_tokens, completion_tokens, cached_tokens) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (
+                _now(),
+                ticket_id,
+                action,
+                question,
+                reply,
+                reason,
+                confidence,
+                topic,
+                model,
+                int(shadow),
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.cached_tokens,
+            ),
         )
 
     def counters(self, since: datetime) -> Digest:
@@ -194,6 +230,12 @@ class Store:
             (moment,),
         ).fetchone()['avg']
 
+        tokens = self._db.execute(
+            'SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt, COALESCE(SUM(completion_tokens), 0) AS completion, '
+            'COALESCE(SUM(cached_tokens), 0) AS cached FROM audit WHERE ts >= ?',
+            (moment,),
+        ).fetchone()
+
         topics = self._db.execute(
             "SELECT topic, COUNT(*) AS n FROM audit WHERE ts >= ? AND topic <> '' "
             'GROUP BY topic ORDER BY n DESC, topic LIMIT 5',
@@ -209,4 +251,7 @@ class Store:
             llm_errors=counts.get(('llm_error', 0), 0),
             avg_confidence=confidence,
             topics=tuple((row['topic'], row['n']) for row in topics),
+            prompt_tokens=tokens['prompt'],
+            completion_tokens=tokens['completion'],
+            cached_tokens=tokens['cached'],
         )

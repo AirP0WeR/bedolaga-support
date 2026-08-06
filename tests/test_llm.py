@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.guard import Guard
-from app.llm import ANSWER, ESCALATE, _sanitize
+from app.llm import ANSWER, ESCALATE, _sanitize, _usage
 
 GUARD = Guard()
 ALLOWING_GUARD = Guard(url_allowlist=frozenset({'example.com'}))
@@ -150,3 +150,33 @@ def test_причина_отбраковки_доезжает_до_наблюд�
     """Причина уходит в аудит и в TG — иначе фильтр молча съедает ответы."""
     verdict = sanitize(answer('Держите https://sub.example.com/abc'))
     assert verdict.reason.startswith('пост-фильтр:')
+
+
+# --- расход токенов -----------------------------------------------------------
+
+
+class FakeUsage:
+    prompt_tokens = 12_000
+    completion_tokens = 180
+
+    class prompt_tokens_details:  # имя как в ответе провайдера
+        cached_tokens = 11_500
+
+
+def test_расход_токенов_снимается_с_ответа():
+    usage = _usage(type('R', (), {'usage': FakeUsage})())
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.cached_tokens) == (12_000, 180, 11_500)
+
+
+def test_ответ_без_usage_не_ломает_разбор():
+    usage = _usage(type('R', (), {})())
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.cached_tokens) == (0, 0, 0)
+
+
+def test_провайдер_без_кеша_даёт_нули_вместо_none():
+    class NoDetails:
+        prompt_tokens = 100
+        completion_tokens = 10
+        prompt_tokens_details = None
+
+    assert _usage(type('R', (), {'usage': NoDetails})()).cached_tokens == 0

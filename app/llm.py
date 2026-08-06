@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from .guard import Guard, build_guard
 from .prompt import VERDICT_SCHEMA, system_prompt, user_prompt
@@ -26,12 +26,22 @@ ERROR = 'error'
 
 
 @dataclass(frozen=True)
+class Usage:
+    """Токены одного обращения. Кешированные считаются и в prompt_tokens."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class Verdict:
     action: str
     reply_text: str = ''
     reason: str = ''
     topic: str = ''
     confidence: float = 0.0
+    usage: Usage = field(default_factory=Usage)
 
     @property
     def is_answer(self) -> bool:
@@ -76,6 +86,19 @@ def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int, g
         return Verdict(ESCALATE, reason=f'пост-фильтр: {rejected}', topic=topic, confidence=confidence)
 
     return Verdict(ANSWER, reply_text=reply, reason=reason, topic=topic, confidence=confidence)
+
+
+def _usage(response) -> Usage:
+    """Расход токенов из ответа провайдера. Его может не быть — это не ошибка."""
+    raw = getattr(response, 'usage', None)
+    if raw is None:
+        return Usage()
+    details = getattr(raw, 'prompt_tokens_details', None)
+    return Usage(
+        prompt_tokens=getattr(raw, 'prompt_tokens', 0) or 0,
+        completion_tokens=getattr(raw, 'completion_tokens', 0) or 0,
+        cached_tokens=getattr(details, 'cached_tokens', 0) or 0,
+    )
 
 
 class OpenAIProvider:
@@ -124,19 +147,22 @@ class OpenAIProvider:
             log.warning('Обращение к модели не удалось', exc_info=True)
             return Verdict(ERROR, reason='модель недоступна')
 
+        usage = _usage(response)
         text = (response.choices[0].message.content or '').strip()
         try:
             raw = json.loads(text)
         except json.JSONDecodeError:
             log.warning('Модель вернула неразбираемый ответ: %.200s', text)
-            return Verdict(ESCALATE, reason='неразбираемый ответ модели')
+            return Verdict(ESCALATE, reason='неразбираемый ответ модели', usage=usage)
 
-        return _sanitize(
+        verdict = _sanitize(
             raw,
             confidence_threshold=confidence_threshold,
             max_reply_chars=max_reply_chars,
             guard=self.guard,
         )
+        # Токены потрачены независимо от того, чем кончился разбор.
+        return replace(verdict, usage=usage)
 
 
 def build_provider(cfg) -> OpenAIProvider:
