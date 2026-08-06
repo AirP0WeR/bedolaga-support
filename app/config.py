@@ -66,11 +66,9 @@ class Config:
     confidence_threshold: float = field(default_factory=lambda: _float('CONFIDENCE_THRESHOLD', 0.7))
     max_reply_chars: int = field(default_factory=lambda: _int('MAX_REPLY_CHARS', 1500))
 
-    # Пост-фильтр ответа (app/guard.py). Пустой allowlist = никаких ссылок.
-    reply_url_allowlist: tuple[str, ...] = field(default_factory=lambda: _list('REPLY_URL_ALLOWLIST'))
-    reply_stopwords: tuple[str, ...] = field(
-        default_factory=lambda: _list('REPLY_STOPWORDS') or guard.DEFAULT_STOPWORDS
-    )
+    # Пост-фильтр ответа (app/guard.py). Пустой список доменов = никаких ссылок.
+    allowed_domains: tuple[str, ...] = field(default_factory=lambda: _list('ALLOWED_DOMAINS'))
+    stop_words: tuple[str, ...] = field(default_factory=lambda: _list('STOP_WORDS') or guard.DEFAULT_STOP_WORDS)
 
     # Наблюдение
     # Сколько сбоев подряд терпим, прежде чем звать человека.

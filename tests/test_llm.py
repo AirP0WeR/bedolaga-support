@@ -6,7 +6,7 @@ from app.guard import Guard
 from app.llm import ANSWER, ESCALATE, _sanitize, _usage
 
 GUARD = Guard()
-ALLOWING_GUARD = Guard(url_allowlist=frozenset({'example.com'}))
+ALLOWING_GUARD = Guard(allowed_domains=frozenset({'example.com'}))
 
 OK = {
     'action': 'answer',
@@ -141,7 +141,7 @@ def test_стоп_слово_ловится_по_корню():
 
 
 def test_свой_список_стоп_слов():
-    guard = Guard(stopwords=('промокод',))
+    guard = Guard(stop_words=('промокод',))
     assert sanitize(answer('Введите промокод в боте.'), guard=guard).action == ESCALATE
     assert sanitize(answer('Оформим возврат.'), guard=guard).action == ANSWER
 
@@ -185,4 +185,11 @@ def test_провайдер_без_кеша_даёт_нули_вместо_none(
 def test_причина_отбраковки_называет_переменную():
     """Человек в топике должен понять, что делать, без чтения README."""
     verdict = sanitize(answer('Статус здесь: https://dash.example.com/'))
-    assert 'REPLY_URL_ALLOWLIST' in verdict.reason
+    assert 'ALLOWED_DOMAINS' in verdict.reason
+
+
+def test_домен_с_цифрой_в_имени_разрешается_как_обычный():
+    """Вроде 2ip.ru — регексп не должен спотыкаться о цифру в начале."""
+    assert sanitize(answer('Проверьте IP на 2ip.ru')).action == ESCALATE
+    guard = Guard(allowed_domains=frozenset({'2ip.ru'}))
+    assert sanitize(answer('Проверьте IP на 2ip.ru'), guard=guard).action == ANSWER

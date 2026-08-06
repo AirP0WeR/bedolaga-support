@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-DEFAULT_STOPWORDS = ('возврат', 'верну деньги', 'компенсац')
+DEFAULT_STOP_WORDS = ('возврат', 'верну деньги', 'компенсац')
 
 # Ссылка со схемой: happ://…, https://… — хост берём до первого разделителя.
 SCHEME_URL = re.compile(r'\b([a-z][a-z0-9+.-]*)://([^\s/?#]+)', re.IGNORECASE)
@@ -34,16 +34,16 @@ def _host(raw: str) -> str:
 
 @dataclass(frozen=True)
 class Guard:
-    """Правила отбраковки. Пустой allowlist означает «никаких ссылок»."""
+    """Правила отбраковки. Пустой список доменов означает «никаких ссылок»."""
 
-    url_allowlist: frozenset[str] = frozenset()
-    stopwords: tuple[str, ...] = DEFAULT_STOPWORDS
+    allowed_domains: frozenset[str] = frozenset()
+    stop_words: tuple[str, ...] = DEFAULT_STOP_WORDS
 
     def _url_allowed(self, host: str) -> bool:
-        return any(host == allowed or host.endswith(f'.{allowed}') for allowed in self.url_allowlist)
+        return any(host == allowed or host.endswith(f'.{allowed}') for allowed in self.allowed_domains)
 
     def unlisted_hosts(self, text: str) -> list[str]:
-        """Хосты из текста, которых нет в allowlist.
+        """Хосты из текста, которых нет в списке разрешённых.
 
         Нужно, чтобы сказать это заранее: если ссылка есть во FAQ, модель её
         перескажет, а фильтр отбракует ответ — и человек узнает об этом из
@@ -63,19 +63,19 @@ class Guard:
         for match in SCHEME_URL.finditer(reply):
             host = _host(match.group(2))
             if not self._url_allowed(host):
-                return f'ссылка на {host or match.group(1)} — домена нет в REPLY_URL_ALLOWLIST'
+                return f'ссылка на {host or match.group(1)} — домена нет в ALLOWED_DOMAINS'
 
         for match in BARE_DOMAIN.finditer(reply):
             host = _host(match.group(1))
             if not self._url_allowed(host):
-                return f'ссылка на {host} — домена нет в REPLY_URL_ALLOWLIST'
+                return f'ссылка на {host} — домена нет в ALLOWED_DOMAINS'
 
         money = MONEY.search(reply)
         if money:
             return f'в ответе сумма ({money.group(0).strip()}) — деньги обсуждает оператор'
 
         lowered = reply.lower()
-        for word in self.stopwords:
+        for word in self.stop_words:
             if word and word.lower() in lowered:
                 return f'стоп-слово «{word}» в ответе'
 
@@ -84,6 +84,6 @@ class Guard:
 
 def build_guard(cfg) -> Guard:
     return Guard(
-        url_allowlist=frozenset(_host(item) for item in cfg.reply_url_allowlist),
-        stopwords=tuple(cfg.reply_stopwords),
+        allowed_domains=frozenset(_host(item) for item in cfg.allowed_domains),
+        stop_words=tuple(cfg.stop_words),
     )

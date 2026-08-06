@@ -148,11 +148,11 @@ def test_ссылки_из_базы_знаний_названы_и_предло�
 
     assert step.status == WARN
     assert 'dash.example.com' in step.detail
-    assert 'REPLY_URL_ALLOWLIST=dash.example.com,t.me' in step.detail
+    assert 'ALLOWED_DOMAINS=dash.example.com,t.me' in step.detail
 
 
 def test_разрешённые_домены_не_попадают_в_предупреждение():
-    guard = Guard(url_allowlist=frozenset({'dash.example.com', 't.me'}))
+    guard = Guard(allowed_domains=frozenset({'dash.example.com', 't.me'}))
     assert selfcheck._check_reply_filter(guard, FAQ_WITH_LINK).status == OK
 
 

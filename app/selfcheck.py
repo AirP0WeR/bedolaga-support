@@ -108,7 +108,7 @@ def _check_reply_filter(guard: Guard, kb_text: str) -> Step:
     if hosts:
         notes.append(
             f'в базе знаний есть ссылки ({", ".join(hosts[:5])}) — ответы с ними уйдут оператору. '
-            f'Разрешить: REPLY_URL_ALLOWLIST={",".join(hosts[:5])}'
+            f'Разрешить: ALLOWED_DOMAINS={",".join(hosts[:5])}'
         )
     if money:
         notes.append('в базе знаний есть суммы — ответы с ценами всегда уходят оператору, это правило не отключается')
