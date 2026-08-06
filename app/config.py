@@ -65,6 +65,8 @@ class Config:
         )
     )
     kb_cache_path: str = field(default_factory=lambda: os.environ.get('KB_CACHE_PATH', '/data/faq-cache.json'))
+    # Отметка живости, которую обновляет каждый цикл; её читает HEALTHCHECK.
+    heartbeat_path: str = field(default_factory=lambda: os.environ.get('HEARTBEAT_PATH', '/data/heartbeat'))
     log_level: str = field(default_factory=lambda: os.environ.get('LOG_LEVEL', 'INFO'))
 
     def require(self) -> None:

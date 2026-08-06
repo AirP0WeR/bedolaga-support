@@ -14,6 +14,7 @@ import signal
 import sys
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 from . import context as context_builder
 from . import gate, llm
@@ -210,6 +211,15 @@ class Service:
 
     # --- цикл -------------------------------------------------------------
 
+    def _beat(self) -> None:
+        """Отметка «цикл дошёл до конца» для HEALTHCHECK."""
+        try:
+            path = Path(self.cfg.heartbeat_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        except OSError:
+            log.warning('Не удалось обновить heartbeat', exc_info=True)
+
     def run_once(self) -> None:
         for ticket in self.api.active_tickets():
             if self._stopping:
@@ -232,6 +242,7 @@ class Service:
                 self.run_once()
             except Exception:
                 log.exception('Цикл упал, жду следующего')
+            self._beat()
             for _ in range(self.cfg.poll_interval):
                 if self._stopping:
                     break

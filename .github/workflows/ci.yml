@@ -15,22 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: requirements.txt
+          enable-cache: true
 
       - name: Установить зависимости
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt ruff
+        # --frozen: лок должен быть актуален, а не молча пересобираться в CI.
+        run: uv sync --frozen
 
       - name: Формат
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: Линт
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Тесты
-        run: pytest -q
+        run: uv run pytest -q

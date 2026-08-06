@@ -73,10 +73,14 @@ docker compose logs -f
 
 ## Разработка
 
+Зависимости и окружение — [uv](https://docs.astral.sh/uv/). Версии
+зафиксированы в `uv.lock`, из него же ставится образ.
+
 ```bash
-python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt ruff
-./.venv/bin/python -m pytest -q
-./.venv/bin/python -m ruff format . && ./.venv/bin/python -m ruff check .
+uv sync                                  # venv по локу, вместе с dev-группой
+uv run pytest -q
+uv run ruff format . && uv run ruff check .
+uv lock --upgrade-package openai         # обновить одну зависимость
 ```
 
 Ворота и разбор вердикта покрыты тестами покейсово — это единственные места,
