@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app import llm
+from app.alerts import Alerts
 from app.config import Config
 from app.main import Service
 from app.store import Store
@@ -61,6 +62,9 @@ class FakeNotifier:
     def problem(self, text: str) -> None:
         self.sent.append('problem')
 
+    def recovered(self, text: str) -> None:
+        self.sent.append('recovered')
+
 
 class FakeProvider:
     model = 'test-model'
@@ -102,6 +106,7 @@ def build_service(cfg: Config, ticket: dict, verdict: llm.Verdict) -> Service:
     service.notifier = FakeNotifier()
     service.kb = FakeKb()
     service.provider = FakeProvider(verdict)
+    service.alerts = Alerts(service.notifier, after_failures=3, cooldown_sec=3600)
     service._stopping = False
     return service
 

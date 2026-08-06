@@ -54,6 +54,10 @@ class Config:
     max_reply_chars: int = field(default_factory=lambda: _int('MAX_REPLY_CHARS', 1500))
 
     # Наблюдение
+    # Сколько сбоев подряд терпим, прежде чем звать человека.
+    alert_after_failures: int = field(default_factory=lambda: _int('ALERT_AFTER_FAILURES', 3))
+    # Не повторяем алерт об одной и той же беде чаще, чем раз в это время.
+    alert_cooldown_sec: int = field(default_factory=lambda: _int('ALERT_COOLDOWN_SEC', 3600))
     tg_bot_token: str = field(default_factory=lambda: os.environ.get('TG_BOT_TOKEN', ''))
     tg_chat_id: str = field(default_factory=lambda: os.environ.get('TG_CHAT_ID', ''))
     tg_topic_id: str = field(default_factory=lambda: os.environ.get('TG_TOPIC_ID', ''))

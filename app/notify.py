@@ -81,3 +81,6 @@ class Notifier:
 
     def problem(self, text: str) -> None:
         self._send(f'⚠️ <b>Сбой сервиса поддержки</b>\n{html.escape(_clip(text, 500))}')
+
+    def recovered(self, text: str) -> None:
+        self._send(f'🟢 <b>Сервис поддержки в норме</b>\n{html.escape(_clip(text, 500))}')

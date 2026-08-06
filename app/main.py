@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import context as context_builder
 from . import gate, llm, timeutil
+from .alerts import CYCLE, LLM, Alerts
 from .bedolaga import Bedolaga
 from .config import Config
 from .kb import KnowledgeBase
@@ -41,6 +42,11 @@ class Service:
             cache_path=cfg.kb_cache_path,
         )
         self.provider = llm.build_provider(cfg)
+        self.alerts = Alerts(
+            self.notifier,
+            after_failures=cfg.alert_after_failures,
+            cooldown_sec=cfg.alert_cooldown_sec,
+        )
         self._stopping = False
 
     def stop(self, *_args) -> None:
@@ -120,7 +126,10 @@ class Service:
             # Провайдер недоступен — тикет не трогаем совсем. Поведение
             # деградирует ровно до «как без ИИ»: ждёт человека.
             log.warning('Тикет %s: модель недоступна, отложил', ticket_id)
+            self.alerts.failure(LLM, verdict.reason, now=time.monotonic())
             return
+
+        self.alerts.success(LLM, now=time.monotonic())
 
         if not verdict.is_answer:
             self._escalate(ticket_id, question=question, reason=verdict.reason, topic=verdict.topic)
@@ -248,8 +257,11 @@ class Service:
         while not self._stopping:
             try:
                 self.run_once()
-            except Exception:
+            except Exception as error:
                 log.exception('Цикл упал, жду следующего')
+                self.alerts.failure(CYCLE, f'{type(error).__name__}: {error}', now=time.monotonic())
+            else:
+                self.alerts.success(CYCLE, now=time.monotonic())
             self._beat()
             for _ in range(self.cfg.poll_interval):
                 if self._stopping:
