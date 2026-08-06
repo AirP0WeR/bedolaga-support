@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
+from . import guard
+
 load_dotenv()
 
 
@@ -22,6 +24,17 @@ def _int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _opt_int(name: str) -> int | None:
+    """Настройка, у которой «не задано» — рабочее значение, а не ноль."""
+    raw = os.environ.get(name, '').strip()
+    return int(raw) if raw else None
+
+
+def _list(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, '')
+    return tuple(item.strip() for item in raw.split(',') if item.strip())
+
+
 def _float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     return float(raw) if raw else default
@@ -32,6 +45,8 @@ class Config:
     # API бедолаги
     bedolaga_url: str = field(default_factory=lambda: os.environ.get('BEDOLAGA_API_URL', ''))
     bedolaga_token: str = field(default_factory=lambda: os.environ.get('BEDOLAGA_API_TOKEN', ''))
+    # Таймзона дат, которые API отдал без таймзоны. См. app/timeutil.py.
+    api_tz: str = field(default_factory=lambda: os.environ.get('API_TZ', 'UTC'))
 
     # LLM
     llm_provider: str = field(default_factory=lambda: os.environ.get('LLM_PROVIDER', 'openai'))
@@ -51,7 +66,17 @@ class Config:
     confidence_threshold: float = field(default_factory=lambda: _float('CONFIDENCE_THRESHOLD', 0.7))
     max_reply_chars: int = field(default_factory=lambda: _int('MAX_REPLY_CHARS', 1500))
 
+    # Пост-фильтр ответа (app/guard.py). Пустой список доменов = никаких ссылок.
+    allowed_domains: tuple[str, ...] = field(default_factory=lambda: _list('ALLOWED_DOMAINS'))
+    stop_words: tuple[str, ...] = field(default_factory=lambda: _list('STOP_WORDS') or guard.DEFAULT_STOP_WORDS)
+
     # Наблюдение
+    # Сколько сбоев подряд терпим, прежде чем звать человека.
+    alert_after_failures: int = field(default_factory=lambda: _int('ALERT_AFTER_FAILURES', 3))
+    # Не повторяем алерт об одной и той же беде чаще, чем раз в это время.
+    alert_cooldown_sec: int = field(default_factory=lambda: _int('ALERT_COOLDOWN_SEC', 3600))
+    # Час (в таймзоне API_TZ), в который уходит суточная сводка. Пусто — не шлём.
+    digest_hour: int | None = field(default_factory=lambda: _opt_int('DIGEST_HOUR'))
     tg_bot_token: str = field(default_factory=lambda: os.environ.get('TG_BOT_TOKEN', ''))
     tg_chat_id: str = field(default_factory=lambda: os.environ.get('TG_CHAT_ID', ''))
     tg_topic_id: str = field(default_factory=lambda: os.environ.get('TG_TOPIC_ID', ''))
@@ -65,6 +90,10 @@ class Config:
         )
     )
     kb_cache_path: str = field(default_factory=lambda: os.environ.get('KB_CACHE_PATH', '/data/faq-cache.json'))
+    # Сколько дней держим аудит (в нём переписка клиентов). 0 — не чистить.
+    audit_retention_days: int = field(default_factory=lambda: _int('AUDIT_RETENTION_DAYS', 90))
+    # Отметка живости, которую обновляет каждый цикл; её читает HEALTHCHECK.
+    heartbeat_path: str = field(default_factory=lambda: os.environ.get('HEARTBEAT_PATH', '/data/heartbeat'))
     log_level: str = field(default_factory=lambda: os.environ.get('LOG_LEVEL', 'INFO'))
 
     def require(self) -> None:

@@ -13,10 +13,12 @@ import logging
 import signal
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from . import context as context_builder
-from . import gate, llm
+from . import gate, llm, selfcheck, timeutil
+from .alerts import CYCLE, LLM, Alerts
 from .bedolaga import Bedolaga
 from .config import Config
 from .kb import KnowledgeBase
@@ -25,10 +27,16 @@ from .store import Store
 
 log = logging.getLogger('support')
 
+# Защита от двух сводок за один назначенный час: цикл короче часа.
+DIGEST_MIN_GAP_SEC = 23 * 3600
+# Чистку аудита достаточно делать раз в сутки.
+PURGE_EVERY_SEC = 24 * 3600
+
 
 class Service:
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        timeutil.set_timezone(cfg.api_tz)
         self.api = Bedolaga(cfg.bedolaga_url, cfg.bedolaga_token)
         self.store = Store(cfg.state_path)
         self.notifier = Notifier(bot_token=cfg.tg_bot_token, chat_id=cfg.tg_chat_id, topic_id=cfg.tg_topic_id)
@@ -39,6 +47,13 @@ class Service:
             cache_path=cfg.kb_cache_path,
         )
         self.provider = llm.build_provider(cfg)
+        self.alerts = Alerts(
+            self.notifier,
+            after_failures=cfg.alert_after_failures,
+            cooldown_sec=cfg.alert_cooldown_sec,
+        )
+        self._digest_at: float | None = None
+        self._purge_at: float | None = None
         self._stopping = False
 
     def stop(self, *_args) -> None:
@@ -53,10 +68,17 @@ class Service:
     # --- обработка одного тикета ----------------------------------------
 
     def handle(self, ticket_id: int) -> None:
+        state = self.store.state(ticket_id)
+
+        # Из тикета, в который зашёл человек, мы вышли навсегда: решение уже
+        # принято, и перечитывать тикет каждый цикл незачем. Остальные проверки
+        # так дёшево не обойти — им нужны свежие данные.
+        if state.human_seen:
+            return
+
         # Всегда перечитываем тикет целиком: списочный эндпоинт отдаёт
         # тикеты без сообщений, а решать по ним нельзя.
         ticket = self.api.ticket(ticket_id)
-        state = self.store.state(ticket_id)
         now = datetime.now(UTC)
 
         decision = gate.decide(
@@ -118,10 +140,20 @@ class Service:
             # Провайдер недоступен — тикет не трогаем совсем. Поведение
             # деградирует ровно до «как без ИИ»: ждёт человека.
             log.warning('Тикет %s: модель недоступна, отложил', ticket_id)
+            self.store.audit(ticket_id, 'llm_error', question=question, reason=verdict.reason)
+            self.alerts.failure(LLM, verdict.reason, now=time.monotonic())
             return
 
+        self.alerts.success(LLM, now=time.monotonic())
+
         if not verdict.is_answer:
-            self._escalate(ticket_id, question=question, reason=verdict.reason, topic=verdict.topic)
+            self._escalate(
+                ticket_id,
+                question=question,
+                reason=verdict.reason,
+                topic=verdict.topic,
+                usage=verdict.usage,
+            )
             self.store.set_last_decided(ticket_id, last_message_id)
             return
 
@@ -136,6 +168,7 @@ class Service:
                 topic=verdict.topic,
                 model=self.provider.model,
                 shadow=True,
+                usage=verdict.usage,
             )
             self.notifier.answered(
                 ticket_id,
@@ -151,7 +184,14 @@ class Service:
         # Перечитываем прямо перед отправкой: пока думала модель, в тикет мог
         # прийти живой админ или новое сообщение клиента.
         fresh = self.api.ticket(ticket_id)
-        if gate.decide(fresh, self.store.state(ticket_id), now=datetime.now(UTC)) != gate.ASK_LLM:
+        recheck = gate.decide(
+            fresh,
+            self.store.state(ticket_id),
+            now=datetime.now(UTC),
+            max_ai_replies=self.cfg.max_ai_replies,
+            debounce_sec=self.cfg.debounce_sec,
+        )
+        if recheck != gate.ASK_LLM:
             log.info('Тикет %s изменился, пока думала модель — ответ отменён', ticket_id)
             return
 
@@ -168,6 +208,7 @@ class Service:
             confidence=verdict.confidence,
             topic=verdict.topic,
             model=self.provider.model,
+            usage=verdict.usage,
         )
         self.notifier.answered(
             ticket_id,
@@ -179,10 +220,19 @@ class Service:
         )
         log.info('Тикет %s: ответили (сообщение %s)', ticket_id, message_id)
 
-    def _escalate(self, ticket_id: int, *, question: str, reason: str, topic: str = '') -> None:
+    def _escalate(
+        self,
+        ticket_id: int,
+        *,
+        question: str,
+        reason: str,
+        topic: str = '',
+        usage: llm.Usage | None = None,
+    ) -> None:
         self.api.set_priority(ticket_id, 'high')
         self.store.mark_escalated(ticket_id)
-        self.store.audit(ticket_id, 'escalate', question=question, reason=reason, topic=topic)
+        # Токены на эскалацию тоже потрачены — иначе расход в сводке занижен.
+        self.store.audit(ticket_id, 'escalate', question=question, reason=reason, topic=topic, usage=usage)
         self.notifier.escalated(ticket_id, question=question, reason=reason)
         log.info('Тикет %s: передан оператору (%s)', ticket_id, reason)
 
@@ -210,6 +260,51 @@ class Service:
 
     # --- цикл -------------------------------------------------------------
 
+    def _maybe_digest(self) -> None:
+        """Сводка за сутки — раз в сутки, в назначенный час.
+
+        Час сверяем по стенным часам (в таймзоне API_TZ), а «не чаще раза в
+        сутки» — по монотонному времени: перевод часов не должен приводить ни
+        к двум сводкам за день, ни к пропуску.
+        """
+        if self.cfg.digest_hour is None:
+            return
+
+        now = datetime.now(UTC)
+        if now.astimezone(timeutil.timezone()).hour != self.cfg.digest_hour:
+            return
+
+        moment = time.monotonic()
+        if self._digest_at is not None and moment - self._digest_at < DIGEST_MIN_GAP_SEC:
+            return
+
+        self._digest_at = moment
+        self.notifier.digest(self.store.counters(now - timedelta(days=1)))
+
+    def _maybe_purge(self) -> None:
+        """Ретеншен аудита: раз в сутки, считая от старта."""
+        if self.cfg.audit_retention_days <= 0:
+            return
+
+        moment = time.monotonic()
+        if self._purge_at is not None and moment - self._purge_at < PURGE_EVERY_SEC:
+            return
+
+        self._purge_at = moment
+        edge = datetime.now(UTC) - timedelta(days=self.cfg.audit_retention_days)
+        deleted = self.store.purge_audit(edge)
+        if deleted:
+            log.info('Аудит: удалено %s записей старше %s дней', deleted, self.cfg.audit_retention_days)
+
+    def _beat(self) -> None:
+        """Отметка «цикл дошёл до конца» для HEALTHCHECK."""
+        try:
+            path = Path(self.cfg.heartbeat_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        except OSError:
+            log.warning('Не удалось обновить heartbeat', exc_info=True)
+
     def run_once(self) -> None:
         for ticket in self.api.active_tickets():
             if self._stopping:
@@ -224,14 +319,22 @@ class Service:
         if self.kb.is_empty:
             raise RuntimeError('База знаний пуста: проверьте FAQ бота и каталог kb/')
 
+        self._maybe_purge()
+
         mode = 'боевой' if self.cfg.reply_enabled else 'теневой (клиенту не отвечаем)'
         log.info('Старт, режим %s, модель %s, опрос раз в %s с', mode, self.provider.model, self.cfg.poll_interval)
 
         while not self._stopping:
             try:
                 self.run_once()
-            except Exception:
+            except Exception as error:
                 log.exception('Цикл упал, жду следующего')
+                self.alerts.failure(CYCLE, f'{type(error).__name__}: {error}', now=time.monotonic())
+            else:
+                self.alerts.success(CYCLE, now=time.monotonic())
+            self._maybe_digest()
+            self._maybe_purge()
+            self._beat()
             for _ in range(self.cfg.poll_interval):
                 if self._stopping:
                     break
@@ -244,6 +347,12 @@ def main() -> None:
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format='%(asctime)s %(levelname)s %(name)s %(message)s',
     )
+
+    # Проверка связности идёт до require(): её задача — объяснить, чего не
+    # хватает, а не упасть на первой же незаполненной переменной.
+    if '--check' in sys.argv:
+        sys.exit(0 if selfcheck.run(cfg) else 1)
+
     cfg.require()
 
     service = Service(cfg)

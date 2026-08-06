@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     tags: ['v*.*.*']
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -17,7 +18,31 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # На PR образ только собирается: публиковать нечего, но сломанный Dockerfile
+  # должен быть виден до слияния, а не при первом деплое.
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Сборка без публикации
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: bedolada-support:pr
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Образ запускается и видит свой код
+        run: docker run --rm bedolada-support:pr python -c "import app.main, app.healthcheck"
+
   build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

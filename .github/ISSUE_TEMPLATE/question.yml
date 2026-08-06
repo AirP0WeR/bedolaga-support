@@ -1,0 +1,20 @@
+name: Вопрос или предложение
+description: Как настроить, почему так сделано, чего не хватает
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Вопрос
+      description: |
+        Если про настройку — приложите содержимое `.env` **без токенов**
+        и вывод `docker compose run --rm support-ai python -m app.main --check`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Что уже пробовали
+    validations:
+      required: false

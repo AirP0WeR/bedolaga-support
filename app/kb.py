@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 
 from .bedolaga import Bedolaga
@@ -24,18 +26,60 @@ log = logging.getLogger(__name__)
 REFRESH_SEC = 900
 
 
+class _TextExtractor(HTMLParser):
+    """Текст из HTML: теги выкидываем, разбиение на абзацы сохраняем.
+
+    Разбор именно парсером, а не счётчиком «< до >»: во FAQ встречается голый
+    знак меньше («трафик < 1 ГБ», куски конфигов), и счётчик съедал весь текст
+    до следующего тега. `convert_charrefs` заодно разворачивает сущности —
+    отдельный html.unescape после него только сломал бы экранированные `&amp;`.
+    """
+
+    # Теги, вокруг которых текст должен разъезжаться на разные строки.
+    BLOCK_TAGS = frozenset(
+        {
+            'p', 'div', 'br', 'li', 'ul', 'ol', 'tr', 'table', 'section', 'article',
+            'blockquote', 'pre', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        }
+    )  # fmt: skip
+    # Содержимое этих тегов — не текст для чтения.
+    SKIP_TAGS = frozenset({'script', 'style'})
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skipping = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in self.SKIP_TAGS:
+            self._skipping += 1
+        elif tag in self.BLOCK_TAGS:
+            self._parts.append('\n')
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.SKIP_TAGS:
+            self._skipping = max(0, self._skipping - 1)
+        elif tag in self.BLOCK_TAGS:
+            self._parts.append('\n')
+
+    def handle_data(self, data: str) -> None:
+        if not self._skipping:
+            self._parts.append(data)
+
+    @property
+    def text(self) -> str:
+        return ''.join(self._parts)
+
+
 def _strip_html(text: str) -> str:
     """FAQ хранится с лёгкой HTML-разметкой — модели она только мешает."""
-    out = []
-    depth = 0
-    for char in text:
-        if char == '<':
-            depth += 1
-        elif char == '>':
-            depth = max(0, depth - 1)
-        elif depth == 0:
-            out.append(char)
-    return ''.join(out)
+    parser = _TextExtractor()
+    parser.feed(text)
+    parser.close()
+
+    lines = [line.strip() for line in parser.text.replace('\xa0', ' ').splitlines()]
+    # Пустые строки нужны как границы абзацев, но больше одной подряд — уже мусор.
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip()
 
 
 def _render_faq(pages: list[dict], language: str) -> str:
@@ -56,6 +100,10 @@ def _render_local(kb_dir: str) -> str:
         return ''
     chunks = []
     for path in sorted(root.rglob('*.md')):
+        # README — инструкция для людей, которые ведут базу, и примеры в нём
+        # выдуманы. Модель приняла бы их за факты о сервисе.
+        if path.name.lower() == 'readme.md':
+            continue
         text = path.read_text(encoding='utf-8').strip()
         if text:
             chunks.append(text)

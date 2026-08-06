@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
+from .guard import Guard, build_guard
 from .prompt import VERDICT_SCHEMA, system_prompt, user_prompt
 
 log = logging.getLogger(__name__)
@@ -25,19 +26,29 @@ ERROR = 'error'
 
 
 @dataclass(frozen=True)
+class Usage:
+    """Токены одного обращения. Кешированные считаются и в prompt_tokens."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class Verdict:
     action: str
     reply_text: str = ''
     reason: str = ''
     topic: str = ''
     confidence: float = 0.0
+    usage: Usage = field(default_factory=Usage)
 
     @property
     def is_answer(self) -> bool:
         return self.action == ANSWER
 
 
-def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int) -> Verdict:
+def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int, guard: Guard | None = None) -> Verdict:
     """Привести ответ модели к вердикту, отбраковав всё сомнительное."""
     action = raw.get('action')
     reply = (raw.get('reply_text') or '').strip()
@@ -70,7 +81,24 @@ def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int) -
             confidence=confidence,
         )
 
+    rejected = guard.reject(reply) if guard else None
+    if rejected:
+        return Verdict(ESCALATE, reason=f'пост-фильтр: {rejected}', topic=topic, confidence=confidence)
+
     return Verdict(ANSWER, reply_text=reply, reason=reason, topic=topic, confidence=confidence)
+
+
+def _usage(response) -> Usage:
+    """Расход токенов из ответа провайдера. Его может не быть — это не ошибка."""
+    raw = getattr(response, 'usage', None)
+    if raw is None:
+        return Usage()
+    details = getattr(raw, 'prompt_tokens_details', None)
+    return Usage(
+        prompt_tokens=getattr(raw, 'prompt_tokens', 0) or 0,
+        completion_tokens=getattr(raw, 'completion_tokens', 0) or 0,
+        cached_tokens=getattr(details, 'cached_tokens', 0) or 0,
+    )
 
 
 class OpenAIProvider:
@@ -81,6 +109,7 @@ class OpenAIProvider:
         model: str,
         base_url: str | None = None,
         brand: str = '',
+        guard: Guard | None = None,
         timeout: float = 120.0,
     ):
         from openai import OpenAI
@@ -88,6 +117,7 @@ class OpenAIProvider:
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=2)
         self.model = model
         self.brand = brand
+        self.guard = guard
 
     def decide(
         self,
@@ -117,14 +147,22 @@ class OpenAIProvider:
             log.warning('Обращение к модели не удалось', exc_info=True)
             return Verdict(ERROR, reason='модель недоступна')
 
+        usage = _usage(response)
         text = (response.choices[0].message.content or '').strip()
         try:
             raw = json.loads(text)
         except json.JSONDecodeError:
             log.warning('Модель вернула неразбираемый ответ: %.200s', text)
-            return Verdict(ESCALATE, reason='неразбираемый ответ модели')
+            return Verdict(ESCALATE, reason='неразбираемый ответ модели', usage=usage)
 
-        return _sanitize(raw, confidence_threshold=confidence_threshold, max_reply_chars=max_reply_chars)
+        verdict = _sanitize(
+            raw,
+            confidence_threshold=confidence_threshold,
+            max_reply_chars=max_reply_chars,
+            guard=self.guard,
+        )
+        # Токены потрачены независимо от того, чем кончился разбор.
+        return replace(verdict, usage=usage)
 
 
 def build_provider(cfg) -> OpenAIProvider:
@@ -135,4 +173,5 @@ def build_provider(cfg) -> OpenAIProvider:
         model=cfg.llm_model,
         base_url=cfg.openai_base_url,
         brand=cfg.brand_name,
+        guard=build_guard(cfg),
     )

@@ -9,10 +9,30 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .gate import TicketState
+from .llm import Usage
+
+
+@dataclass(frozen=True)
+class Digest:
+    """Что сервис сделал за период. Пустой — тоже осмысленный ответ."""
+
+    since: datetime
+    answered: int = 0
+    answered_shadow: int = 0
+    escalated: int = 0
+    handover: int = 0
+    llm_errors: int = 0
+    avg_confidence: float | None = None
+    topics: tuple[tuple[str, int], ...] = field(default_factory=tuple)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tickets (
@@ -43,6 +63,14 @@ CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
 CREATE INDEX IF NOT EXISTS audit_ticket ON audit (ticket_id);
 """
 
+# Колонки, добавленные после первого релиза. База переживает пересоздание
+# контейнера, поэтому у людей на серверах она старая — досыпаем на открытии.
+MIGRATIONS = (
+    ('audit', 'prompt_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+    ('audit', 'completion_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+    ('audit', 'cached_tokens', 'INTEGER NOT NULL DEFAULT 0'),
+)
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -56,6 +84,13 @@ class Store:
         self._db.row_factory = sqlite3.Row
         self._db.execute('PRAGMA journal_mode=WAL')
         self._db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        for table, column, definition in MIGRATIONS:
+            existing = {row['name'] for row in self._db.execute(f'PRAGMA table_info({table})')}
+            if column not in existing:
+                self._db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
 
     def close(self) -> None:
         self._db.close()
@@ -155,13 +190,85 @@ class Store:
         topic: str = '',
         model: str = '',
         shadow: bool = False,
+        usage: Usage | None = None,
     ) -> None:
+        usage = usage or Usage()
         self._db.execute(
-            'INSERT INTO audit (ts, ticket_id, action, question, reply, reason, confidence, topic, model, shadow) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (_now(), ticket_id, action, question, reply, reason, confidence, topic, model, int(shadow)),
+            'INSERT INTO audit (ts, ticket_id, action, question, reply, reason, confidence, topic, model, shadow, '
+            'prompt_tokens, completion_tokens, cached_tokens) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (
+                _now(),
+                ticket_id,
+                action,
+                question,
+                reply,
+                reason,
+                confidence,
+                topic,
+                model,
+                int(shadow),
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.cached_tokens,
+            ),
         )
 
-    def counters(self) -> dict[str, int]:
-        rows = self._db.execute('SELECT action, COUNT(*) AS n FROM audit GROUP BY action').fetchall()
-        return {row['action']: row['n'] for row in rows}
+    def purge_audit(self, older_than: datetime) -> int:
+        """Убрать из аудита записи старше даты. Возвращает, сколько удалено.
+
+        В аудите лежат тексты обращений и ответов — то есть переписка живых
+        людей. Хранить её бессрочно незачем: разбор качества смотрят по свежим
+        дням, а сводка считается за сутки.
+        """
+        deleted = self._db.execute(
+            'DELETE FROM audit WHERE ts < ?',
+            (older_than.astimezone(UTC).isoformat(),),
+        ).rowcount
+        if deleted:
+            # Файл иначе не отдаёт место обратно, а база лежит на том же
+            # томе, что и состояние.
+            self._db.execute('VACUUM')
+        return deleted
+
+    def counters(self, since: datetime) -> Digest:
+        """Сводка по аудиту за период — то, из чего складывается дайджест."""
+        moment = since.astimezone(UTC).isoformat()
+
+        counts: dict[tuple[str, int], int] = {}
+        for row in self._db.execute(
+            'SELECT action, shadow, COUNT(*) AS n FROM audit WHERE ts >= ? GROUP BY action, shadow',
+            (moment,),
+        ):
+            counts[(row['action'], row['shadow'])] = row['n']
+
+        confidence = self._db.execute(
+            "SELECT AVG(confidence) AS avg FROM audit WHERE ts >= ? AND action = 'answer' AND confidence IS NOT NULL",
+            (moment,),
+        ).fetchone()['avg']
+
+        tokens = self._db.execute(
+            'SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt, COALESCE(SUM(completion_tokens), 0) AS completion, '
+            'COALESCE(SUM(cached_tokens), 0) AS cached FROM audit WHERE ts >= ?',
+            (moment,),
+        ).fetchone()
+
+        topics = self._db.execute(
+            "SELECT topic, COUNT(*) AS n FROM audit WHERE ts >= ? AND topic <> '' "
+            'GROUP BY topic ORDER BY n DESC, topic LIMIT 5',
+            (moment,),
+        ).fetchall()
+
+        return Digest(
+            since=since,
+            answered=counts.get(('answer', 0), 0),
+            answered_shadow=counts.get(('answer', 1), 0),
+            escalated=counts.get(('escalate', 0), 0),
+            handover=counts.get(('handover', 0), 0),
+            llm_errors=counts.get(('llm_error', 0), 0),
+            avg_confidence=confidence,
+            topics=tuple((row['topic'], row['n']) for row in topics),
+            prompt_tokens=tokens['prompt'],
+            completion_tokens=tokens['completion'],
+            cached_tokens=tokens['cached'],
+        )

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from .bedolaga import Bedolaga
 from .gate import READABLE_MEDIA
+from .timeutil import parse_dt
 
 log = logging.getLogger(__name__)
 
@@ -20,15 +21,24 @@ log = logging.getLogger(__name__)
 CONVERSATION_TAIL = 20
 # Больше одного скриншота за раз не отдаём: дорого и почти всегда лишнее.
 MAX_IMAGES = 1
+# Потолок на картинку. Больше — обрабатываем тикет без неё: это хуже, чем со
+# скриншотом, но лучше, чем отправить в модель десяток мегабайт в base64.
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
+
+# Форматы, которые модель читает. Тип берём из самих байтов: media_type от
+# бота говорит «photo», а чем оно окажется на деле — не обещает никто.
+MAGIC = (
+    (b'\xff\xd8\xff', 'image/jpeg'),
+    (b'\x89PNG\r\n\x1a\n', 'image/png'),
+)
 
 
-def _as_dt(value: object) -> datetime | None:
-    if isinstance(value, str) and value:
-        try:
-            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        except ValueError:
-            return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+def _image_mime(blob: bytes) -> str | None:
+    for prefix, mime in MAGIC:
+        if blob.startswith(prefix):
+            return mime
+    if blob[:4] == b'RIFF' and blob[8:12] == b'WEBP':
+        return 'image/webp'
     return None
 
 
@@ -66,7 +76,7 @@ def render_account(user: dict | None, *, now: datetime) -> str:
     if subscription.get('tariff_name'):
         parts.append(f'Тариф: {subscription["tariff_name"]}')
 
-    end_date = _as_dt(subscription.get('end_date'))
+    end_date = parse_dt(subscription.get('end_date'))
     if end_date:
         days_left = (end_date - now).days
         when = end_date.strftime('%d.%m.%Y')
@@ -107,8 +117,21 @@ def collect_images(api: Bedolaga, ticket: dict) -> list[str]:
         if not blob:
             continue
 
+        if len(blob) > MAX_IMAGE_BYTES:
+            log.warning(
+                'Тикет %s: скриншот %.1f МиБ больше лимита — отдаю модели тикет без него',
+                ticket.get('id'),
+                len(blob) / 1024 / 1024,
+            )
+            continue
+
+        mime = _image_mime(blob)
+        if mime is None:
+            log.warning('Тикет %s: не опознал формат вложения, пропускаю', ticket.get('id'))
+            continue
+
         encoded = base64.b64encode(blob).decode('ascii')
-        images.append(f'data:image/jpeg;base64,{encoded}')
+        images.append(f'data:{mime};base64,{encoded}')
     return images
 
 

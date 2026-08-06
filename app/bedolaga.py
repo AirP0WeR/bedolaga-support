@@ -20,6 +20,11 @@ log = logging.getLogger(__name__)
 # одно значение, поэтому опрашиваем оба.
 ACTIVE_STATUSES = ('open', 'pending')
 
+# Потолок страницы у эндпоинта (webapi/routes/tickets.py:68, `le=200`).
+PAGE_LIMIT = 200
+# Предохранитель от бесконечного листания, если offset вдруг не работает.
+MAX_PAGES = 50
+
 
 class Bedolaga:
     def __init__(self, base_url: str, token: str, *, timeout: float = 30.0):
@@ -42,14 +47,36 @@ class Bedolaga:
 
     # --- тикеты ---------------------------------------------------------
 
-    def active_tickets(self, limit: int = 200) -> list[dict]:
-        """Тикеты, ждущие ответа, по обоим «живым» статусам."""
+    def active_tickets(self, page_size: int = PAGE_LIMIT) -> list[dict]:
+        """Тикеты, ждущие ответа, по обоим «живым» статусам.
+
+        Листаем до исчерпания: одной страницы хватает не всегда, а необработанный
+        хвост бэклога ничем себя не проявляет — тикеты просто никогда не берутся
+        в работу. Дубли между страницами (список едет, пока мы его читаем)
+        схлопываются по id.
+        """
+        page_size = min(page_size, PAGE_LIMIT)
         seen: dict[int, dict] = {}
+
         for status in ACTIVE_STATUSES:
-            response = self._http.get('/tickets', params={'status': status, 'limit': limit})
-            response.raise_for_status()
-            for ticket in response.json():
-                seen[ticket['id']] = ticket
+            for page in range(MAX_PAGES):
+                params = {'status': status, 'limit': page_size, 'offset': page * page_size}
+                response = self._http.get('/tickets', params=params)
+                response.raise_for_status()
+                batch = response.json()
+
+                for ticket in batch:
+                    seen[ticket['id']] = ticket
+
+                if len(batch) < page_size:
+                    break
+            else:
+                log.warning(
+                    'Тикетов в статусе %s больше %s — часть не обработана в этом цикле',
+                    status,
+                    MAX_PAGES * page_size,
+                )
+
         return list(seen.values())
 
     def ticket(self, ticket_id: int) -> dict:

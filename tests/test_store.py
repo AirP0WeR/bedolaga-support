@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from app.llm import Usage
 from app.store import Store
+
+LONG_AGO = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def test_пустое_состояние_безопасно():
@@ -70,4 +78,127 @@ def test_аудит_считает_действия():
     store.audit(1, 'answer', question='как подключить', reply='вот так', confidence=0.9)
     store.audit(2, 'escalate', reason='деньги')
     store.audit(3, 'escalate', reason='нет ответа в базе')
-    assert store.counters() == {'answer': 1, 'escalate': 2}
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.answered, digest.escalated) == (1, 2)
+
+
+def test_черновики_считаются_отдельно_от_ответов():
+    """В теневом режиме важно не спутать «ответили» с «ответили бы»."""
+    store = Store(':memory:')
+    store.audit(1, 'answer', reply='вот так', confidence=0.9, shadow=True)
+    store.audit(2, 'answer', reply='и так', confidence=0.8)
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.answered, digest.answered_shadow) == (1, 1)
+
+
+def test_сводка_считает_только_свой_период():
+    store = Store(':memory:')
+    store.audit(1, 'answer', confidence=0.9)
+
+    assert store.counters(datetime.now(UTC) + timedelta(seconds=1)).answered == 0
+    assert store.counters(LONG_AGO).answered == 1
+
+
+def test_средняя_уверенность_по_ответам():
+    store = Store(':memory:')
+    store.audit(1, 'answer', confidence=1.0)
+    store.audit(2, 'answer', confidence=0.5)
+    store.audit(3, 'escalate', confidence=0.1)  # эскалации в среднее не входят
+
+    assert store.counters(LONG_AGO).avg_confidence == pytest.approx(0.75)
+
+
+def test_средняя_уверенность_без_ответов_пуста():
+    assert Store(':memory:').counters(LONG_AGO).avg_confidence is None
+
+
+def test_темы_в_порядке_убывания_и_не_больше_пяти():
+    store = Store(':memory:')
+    for topic in ['оплата'] * 3 + ['подключение'] * 2 + ['устройства', 'скорость', 'возврат', 'бан']:
+        store.audit(1, 'answer', topic=topic)
+    store.audit(1, 'answer')  # без темы — в сводку не попадает
+
+    topics = store.counters(LONG_AGO).topics
+
+    assert len(topics) == 5
+    assert topics[0] == ('оплата', 3)
+    assert topics[1] == ('подключение', 2)
+    assert all(topic for topic, _ in topics)
+
+
+def test_ошибки_модели_видны_в_сводке():
+    store = Store(':memory:')
+    store.audit(1, 'llm_error', reason='модель недоступна')
+
+    assert store.counters(LONG_AGO).llm_errors == 1
+
+
+def test_токены_копятся_в_сводке():
+    store = Store(':memory:')
+    store.audit(1, 'answer', usage=Usage(prompt_tokens=1000, completion_tokens=120, cached_tokens=900))
+    store.audit(2, 'escalate', usage=Usage(prompt_tokens=1000, completion_tokens=30, cached_tokens=980))
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.prompt_tokens, digest.completion_tokens, digest.cached_tokens) == (2000, 150, 1880)
+
+
+def test_аудит_без_расхода_токенов_не_ломается():
+    store = Store(':memory:')
+    store.audit(1, 'handover', reason='человек в тикете')
+    assert store.counters(LONG_AGO).prompt_tokens == 0
+
+
+def test_старая_база_дополняется_колонками(tmp_path):
+    """У людей на серверах база от прошлой версии — она должна открыться."""
+    path = str(tmp_path / 'state.db')
+    old = sqlite3.connect(path)
+    old.executescript(
+        'CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, ticket_id INTEGER NOT NULL, '
+        'action TEXT NOT NULL, question TEXT, reply TEXT, reason TEXT, confidence REAL, topic TEXT, model TEXT, '
+        "shadow INTEGER NOT NULL DEFAULT 0); INSERT INTO audit (ts, ticket_id, action) VALUES ('2000-01-02', 1, "
+        "'answer');"
+    )
+    old.commit()
+    old.close()
+
+    store = Store(path)
+    store.audit(2, 'answer', usage=Usage(prompt_tokens=10, completion_tokens=5))
+
+    digest = store.counters(LONG_AGO)
+    assert digest.answered == 2  # старая запись никуда не делась
+    assert digest.prompt_tokens == 10
+
+
+def _audit_at(store: Store, ts: str, action: str = 'answer') -> None:
+    store._db.execute('INSERT INTO audit (ts, ticket_id, action) VALUES (?, 1, ?)', (ts, action))
+
+
+def test_чистка_убирает_старое_и_бережёт_свежее(tmp_path):
+    store = Store(str(tmp_path / 'state.db'))
+    _audit_at(store, '2026-01-01T00:00:00+00:00')
+    _audit_at(store, '2026-08-01T00:00:00+00:00')
+
+    deleted = store.purge_audit(datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert deleted == 1
+    assert store.counters(LONG_AGO).answered == 1
+
+
+def test_чистка_на_пустой_базе_ничего_не_делает():
+    assert Store(':memory:').purge_audit(datetime(2026, 6, 1, tzinfo=UTC)) == 0
+
+
+def test_чистка_не_трогает_состояние_тикетов(tmp_path):
+    """Аудит — история, а состояние решает, ответим ли мы второй раз."""
+    store = Store(str(tmp_path / 'state.db'))
+    store.finish_reply(5, 100)
+    _audit_at(store, '2026-01-01T00:00:00+00:00')
+
+    store.purge_audit(datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert store.state(5).our_message_ids == [100]
