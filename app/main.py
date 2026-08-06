@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import context as context_builder
-from . import gate, llm
+from . import gate, llm, timeutil
 from .bedolaga import Bedolaga
 from .config import Config
 from .kb import KnowledgeBase
@@ -30,6 +30,7 @@ log = logging.getLogger('support')
 class Service:
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        timeutil.set_timezone(cfg.api_tz)
         self.api = Bedolaga(cfg.bedolaga_url, cfg.bedolaga_token)
         self.store = Store(cfg.state_path)
         self.notifier = Notifier(bot_token=cfg.tg_bot_token, chat_id=cfg.tg_chat_id, topic_id=cfg.tg_topic_id)

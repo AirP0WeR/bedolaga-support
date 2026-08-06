@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from .bedolaga import Bedolaga
 from .gate import READABLE_MEDIA
+from .timeutil import parse_dt
 
 log = logging.getLogger(__name__)
 
@@ -20,16 +21,6 @@ log = logging.getLogger(__name__)
 CONVERSATION_TAIL = 20
 # Больше одного скриншота за раз не отдаём: дорого и почти всегда лишнее.
 MAX_IMAGES = 1
-
-
-def _as_dt(value: object) -> datetime | None:
-    if isinstance(value, str) and value:
-        try:
-            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        except ValueError:
-            return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    return None
 
 
 def render_conversation(messages: list[dict]) -> str:
@@ -66,7 +57,7 @@ def render_account(user: dict | None, *, now: datetime) -> str:
     if subscription.get('tariff_name'):
         parts.append(f'Тариф: {subscription["tariff_name"]}')
 
-    end_date = _as_dt(subscription.get('end_date'))
+    end_date = parse_dt(subscription.get('end_date'))
     if end_date:
         days_left = (end_date - now).days
         when = end_date.strftime('%d.%m.%Y')

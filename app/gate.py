@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
+
+from .timeutil import parse_dt
 
 BLACKLIST = 'blacklist'  # в тикете человек — выходим из него навсегда
 SKIP = 'skip'  # ничего не делаем сейчас
@@ -37,20 +39,10 @@ class TicketState:
     human_seen: bool = False
 
 
-def _as_dt(value: object) -> datetime | None:
-    if isinstance(value, str) and value:
-        try:
-            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        except ValueError:
-            return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    return None
-
-
 def _reply_block_active(ticket: dict, now: datetime) -> bool:
     if ticket.get('user_reply_block_permanent'):
         return True
-    until = _as_dt(ticket.get('user_reply_block_until'))
+    until = parse_dt(ticket.get('user_reply_block_until'))
     return until is not None and until > now
 
 
@@ -158,7 +150,7 @@ def decide(
     if last.get('is_from_admin'):
         return SKIP
 
-    created_at = _as_dt(last.get('created_at'))
+    created_at = parse_dt(last.get('created_at'))
     if created_at is not None and (now - created_at).total_seconds() < debounce_sec:
         return DEFER
 

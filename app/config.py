@@ -32,6 +32,8 @@ class Config:
     # API бедолаги
     bedolaga_url: str = field(default_factory=lambda: os.environ.get('BEDOLAGA_API_URL', ''))
     bedolaga_token: str = field(default_factory=lambda: os.environ.get('BEDOLAGA_API_TOKEN', ''))
+    # Таймзона дат, которые API отдал без таймзоны. См. app/timeutil.py.
+    api_tz: str = field(default_factory=lambda: os.environ.get('API_TZ', 'UTC'))
 
     # LLM
     llm_provider: str = field(default_factory=lambda: os.environ.get('LLM_PROVIDER', 'openai'))
