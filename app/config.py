@@ -92,6 +92,8 @@ class Config:
         )
     )
     kb_cache_path: str = field(default_factory=lambda: os.environ.get('KB_CACHE_PATH', '/data/faq-cache.json'))
+    # Сколько дней держим аудит (в нём переписка клиентов). 0 — не чистить.
+    audit_retention_days: int = field(default_factory=lambda: _int('AUDIT_RETENTION_DAYS', 90))
     # Отметка живости, которую обновляет каждый цикл; её читает HEALTHCHECK.
     heartbeat_path: str = field(default_factory=lambda: os.environ.get('HEARTBEAT_PATH', '/data/heartbeat'))
     log_level: str = field(default_factory=lambda: os.environ.get('LOG_LEVEL', 'INFO'))

@@ -214,6 +214,23 @@ class Store:
             ),
         )
 
+    def purge_audit(self, older_than: datetime) -> int:
+        """Убрать из аудита записи старше даты. Возвращает, сколько удалено.
+
+        В аудите лежат тексты обращений и ответов — то есть переписка живых
+        людей. Хранить её бессрочно незачем: разбор качества смотрят по свежим
+        дням, а сводка считается за сутки.
+        """
+        deleted = self._db.execute(
+            'DELETE FROM audit WHERE ts < ?',
+            (older_than.astimezone(UTC).isoformat(),),
+        ).rowcount
+        if deleted:
+            # Файл иначе не отдаёт место обратно, а база лежит на том же
+            # томе, что и состояние.
+            self._db.execute('VACUUM')
+        return deleted
+
     def counters(self, since: datetime) -> Digest:
         """Сводка по аудиту за период — то, из чего складывается дайджест."""
         moment = since.astimezone(UTC).isoformat()

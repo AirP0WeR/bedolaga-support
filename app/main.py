@@ -29,6 +29,8 @@ log = logging.getLogger('support')
 
 # Защита от двух сводок за один назначенный час: цикл короче часа.
 DIGEST_MIN_GAP_SEC = 23 * 3600
+# Чистку аудита достаточно делать раз в сутки.
+PURGE_EVERY_SEC = 24 * 3600
 
 
 class Service:
@@ -51,6 +53,7 @@ class Service:
             cooldown_sec=cfg.alert_cooldown_sec,
         )
         self._digest_at: float | None = None
+        self._purge_at: float | None = None
         self._stopping = False
 
     def stop(self, *_args) -> None:
@@ -278,6 +281,21 @@ class Service:
         self._digest_at = moment
         self.notifier.digest(self.store.counters(now - timedelta(days=1)))
 
+    def _maybe_purge(self) -> None:
+        """Ретеншен аудита: раз в сутки, считая от старта."""
+        if self.cfg.audit_retention_days <= 0:
+            return
+
+        moment = time.monotonic()
+        if self._purge_at is not None and moment - self._purge_at < PURGE_EVERY_SEC:
+            return
+
+        self._purge_at = moment
+        edge = datetime.now(UTC) - timedelta(days=self.cfg.audit_retention_days)
+        deleted = self.store.purge_audit(edge)
+        if deleted:
+            log.info('Аудит: удалено %s записей старше %s дней', deleted, self.cfg.audit_retention_days)
+
     def _beat(self) -> None:
         """Отметка «цикл дошёл до конца» для HEALTHCHECK."""
         try:
@@ -301,6 +319,8 @@ class Service:
         if self.kb.is_empty:
             raise RuntimeError('База знаний пуста: проверьте FAQ бота и каталог kb/')
 
+        self._maybe_purge()
+
         mode = 'боевой' if self.cfg.reply_enabled else 'теневой (клиенту не отвечаем)'
         log.info('Старт, режим %s, модель %s, опрос раз в %s с', mode, self.provider.model, self.cfg.poll_interval)
 
@@ -313,6 +333,7 @@ class Service:
             else:
                 self.alerts.success(CYCLE, now=time.monotonic())
             self._maybe_digest()
+            self._maybe_purge()
             self._beat()
             for _ in range(self.cfg.poll_interval):
                 if self._stopping:

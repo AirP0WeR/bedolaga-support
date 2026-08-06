@@ -172,3 +172,33 @@ def test_старая_база_дополняется_колонками(tmp_pat
     digest = store.counters(LONG_AGO)
     assert digest.answered == 2  # старая запись никуда не делась
     assert digest.prompt_tokens == 10
+
+
+def _audit_at(store: Store, ts: str, action: str = 'answer') -> None:
+    store._db.execute('INSERT INTO audit (ts, ticket_id, action) VALUES (?, 1, ?)', (ts, action))
+
+
+def test_чистка_убирает_старое_и_бережёт_свежее(tmp_path):
+    store = Store(str(tmp_path / 'state.db'))
+    _audit_at(store, '2026-01-01T00:00:00+00:00')
+    _audit_at(store, '2026-08-01T00:00:00+00:00')
+
+    deleted = store.purge_audit(datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert deleted == 1
+    assert store.counters(LONG_AGO).answered == 1
+
+
+def test_чистка_на_пустой_базе_ничего_не_делает():
+    assert Store(':memory:').purge_audit(datetime(2026, 6, 1, tzinfo=UTC)) == 0
+
+
+def test_чистка_не_трогает_состояние_тикетов(tmp_path):
+    """Аудит — история, а состояние решает, ответим ли мы второй раз."""
+    store = Store(str(tmp_path / 'state.db'))
+    store.finish_reply(5, 100)
+    _audit_at(store, '2026-01-01T00:00:00+00:00')
+
+    store.purge_audit(datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert store.state(5).our_message_ids == [100]
