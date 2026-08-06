@@ -65,10 +65,17 @@ class Service:
     # --- обработка одного тикета ----------------------------------------
 
     def handle(self, ticket_id: int) -> None:
+        state = self.store.state(ticket_id)
+
+        # Из тикета, в который зашёл человек, мы вышли навсегда: решение уже
+        # принято, и перечитывать тикет каждый цикл незачем. Остальные проверки
+        # так дёшево не обойти — им нужны свежие данные.
+        if state.human_seen:
+            return
+
         # Всегда перечитываем тикет целиком: списочный эндпоинт отдаёт
         # тикеты без сообщений, а решать по ним нельзя.
         ticket = self.api.ticket(ticket_id)
-        state = self.store.state(ticket_id)
         now = datetime.now(UTC)
 
         decision = gate.decide(

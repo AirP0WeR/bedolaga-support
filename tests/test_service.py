@@ -21,10 +21,12 @@ from app.store import Store
 class FakeApi:
     def __init__(self, ticket: dict):
         self._ticket = ticket
+        self.reads = 0
         self.replies: list[tuple[int, str]] = []
         self.priorities: list[tuple[int, str]] = []
 
     def ticket(self, ticket_id: int) -> dict:
+        self.reads += 1
         return self._ticket
 
     def user(self, user_id: int) -> dict | None:
@@ -185,3 +187,22 @@ def test_без_настройки_сводка_выключена():
     service._maybe_digest()
 
     assert service.notifier.sent == []
+
+
+def test_тикет_с_человеком_не_читается_из_api(answer):
+    """Решение по нему принято навсегда, а запрос каждый цикл — впустую."""
+    service = build_service(config(), ticket_with_message_age(60), answer)
+    service.store.mark_human(7)
+
+    service.handle(7)
+
+    assert service.api.reads == 0
+
+
+def test_обычный_тикет_по_прежнему_перечитывается(answer):
+    service = build_service(config(), ticket_with_message_age(60), answer)
+
+    service.handle(7)
+
+    assert service.api.reads > 0
+    assert service.api.replies != []
