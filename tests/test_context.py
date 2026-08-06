@@ -4,9 +4,33 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.context import render_account, render_conversation
+from app.context import MAX_IMAGE_BYTES, collect_images, render_account, render_conversation
 
 NOW = datetime(2026, 8, 4, 12, 0, 0, tzinfo=UTC)
+
+JPEG = b'\xff\xd8\xff' + b'0' * 100
+PNG = b'\x89PNG\r\n\x1a\n' + b'0' * 100
+WEBP = b'RIFF\x00\x00\x00\x00WEBP' + b'0' * 100
+
+
+class FakeApi:
+    """Отдаёт один и тот же блоб на любое вложение."""
+
+    def __init__(self, blob: bytes):
+        self._blob = blob
+
+    def message_media(self, ticket_id: int, message_id: int) -> dict:
+        return {'media_file_id': 'file-1'}
+
+    def download_media(self, file_id: str) -> bytes:
+        return self._blob
+
+
+def ticket_with_screenshot() -> dict:
+    return {
+        'id': 1,
+        'messages': [{'id': 1, 'is_from_admin': False, 'has_media': True, 'media_type': 'photo'}],
+    }
 
 
 def test_переписка_размечена_ролями():
@@ -104,3 +128,35 @@ def test_ссылка_подписки_не_попадает_в_контекст
 
 def test_отсутствующий_аккаунт_не_ломает_сборку():
     assert 'не найден' in render_account(None, now=NOW)
+
+
+def test_jpeg_уходит_модели():
+    images = collect_images(FakeApi(JPEG), ticket_with_screenshot())
+    assert len(images) == 1
+    assert images[0].startswith('data:image/jpeg;base64,')
+
+
+def test_png_не_выдаётся_за_jpeg():
+    """MIME раньше был константой, и png уезжал в модель с чужим типом."""
+    images = collect_images(FakeApi(PNG), ticket_with_screenshot())
+    assert images[0].startswith('data:image/png;base64,')
+
+
+def test_webp_опознаётся():
+    images = collect_images(FakeApi(WEBP), ticket_with_screenshot())
+    assert images[0].startswith('data:image/webp;base64,')
+
+
+def test_крупная_картинка_пропускается(caplog):
+    blob = b'\xff\xd8\xff' + b'0' * MAX_IMAGE_BYTES
+    with caplog.at_level('WARNING', logger='app.context'):
+        images = collect_images(FakeApi(blob), ticket_with_screenshot())
+    assert images == []
+    assert any('больше лимита' in record.message for record in caplog.records)
+
+
+def test_неопознанный_формат_пропускается(caplog):
+    with caplog.at_level('WARNING', logger='app.context'):
+        images = collect_images(FakeApi(b'GIF89a' + b'0' * 100), ticket_with_screenshot())
+    assert images == []
+    assert any('формат' in record.message for record in caplog.records)
