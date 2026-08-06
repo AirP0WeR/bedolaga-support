@@ -116,7 +116,7 @@ class FakeNotifier:
         self.enabled = enabled
         self.sent: list[str] = []
 
-    def problem(self, text: str) -> None:
+    def hello(self, text: str) -> None:
         self.sent.append(text)
 
 

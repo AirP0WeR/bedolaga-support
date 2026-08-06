@@ -52,7 +52,7 @@ class Alerts:
 
         state.alerted_at = now
         label = LABELS.get(kind, kind)
-        self._notifier.problem(f'{label}: {state.failures} сбоя подряд.\n{detail}\nКлиентам сейчас не отвечаем.')
+        self._notifier.problem(f'{label} — сбоев подряд: {state.failures}.\n{detail}\nКлиентам сейчас не отвечаем.')
         log.error('Алерт: %s, сбоев подряд %s (%s)', label, state.failures, detail)
 
     def success(self, kind: str, *, now: float) -> None:

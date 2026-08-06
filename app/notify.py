@@ -79,6 +79,10 @@ class Notifier:
         tail = ' Приоритет поднят — тикет мог остаться без внимания.' if escalated else ''
         self._send(f'👤 <b>Тикет #{ticket_id} ведёт человек</b> — сервис из него вышел.{tail}')
 
+    def hello(self, text: str) -> None:
+        """Нейтральное сообщение: проверка связи, а не событие по тикету."""
+        self._send(f'🤖 <b>Сервис поддержки</b>\n{html.escape(_clip(text, 500))}')
+
     def problem(self, text: str) -> None:
         self._send(f'⚠️ <b>Сбой сервиса поддержки</b>\n{html.escape(_clip(text, 500))}')
 

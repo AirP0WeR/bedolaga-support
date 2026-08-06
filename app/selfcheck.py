@@ -118,7 +118,7 @@ def _check_reply_filter(guard: Guard, kb_text: str) -> Step:
 def _check_notifier(notifier: Notifier) -> Step:
     if not notifier.enabled:
         return Step('Наблюдение', WARN, 'TG_BOT_TOKEN или TG_CHAT_ID не заданы — сервис будет работать вслепую')
-    notifier.problem('Проверка связи: сервис поддержки видит этот топик.')
+    notifier.hello('Проверка связи: этот топик подключён, сюда будут падать черновики и эскалации.')
     return Step('Наблюдение', OK, 'тестовое сообщение отправлено — проверьте топик')
 
 
