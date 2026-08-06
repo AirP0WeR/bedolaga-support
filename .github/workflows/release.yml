@@ -1,0 +1,88 @@
+name: Релиз
+
+# Ставит тег и публикует релиз с образом. Запускается вручную:
+# Actions → Релиз → Run workflow → номер версии без «v».
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Версия без «v», например 0.1.0
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Три проверки до любых записей: формат, совпадение с pyproject и
+      # отсутствие такого тега. Тег неизменяем, ошибку потом не отозвать.
+      - name: Проверить версию
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Версия должна быть вида X.Y.Z без «v», получено «$VERSION»"
+            exit 1
+          fi
+          project=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [ "$project" != "$VERSION" ]; then
+            echo "::error::В pyproject.toml версия $project — сначала обновите её и CHANGELOG"
+            exit 1
+          fi
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "::error::Тег v$VERSION уже существует"
+            exit 1
+          fi
+
+      - name: Заметки к релизу из CHANGELOG
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::В CHANGELOG.md нет раздела «## $VERSION»"
+            exit 1
+          fi
+          cat release-notes.md
+
+      - name: Тег
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "v$VERSION" -m "Выпуск $VERSION"
+          git push origin "v$VERSION"
+
+      - name: Релиз
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
+
+  # Тег, поставленный под GITHUB_TOKEN, не запускает сборку по триггеру
+  # `push: tags` — поэтому вызываем её явно и передаём версию для тегов образа.
+  image:
+    needs: tag
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ inputs.version }}
