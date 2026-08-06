@@ -42,17 +42,33 @@ class Guard:
     def _url_allowed(self, host: str) -> bool:
         return any(host == allowed or host.endswith(f'.{allowed}') for allowed in self.url_allowlist)
 
+    def unlisted_hosts(self, text: str) -> list[str]:
+        """Хосты из текста, которых нет в allowlist.
+
+        Нужно, чтобы сказать это заранее: если ссылка есть во FAQ, модель её
+        перескажет, а фильтр отбракует ответ — и человек узнает об этом из
+        эскалации вместо ответа. `--check` показывает такие домены до запуска.
+        """
+        found = {_host(match.group(2)) for match in SCHEME_URL.finditer(text)}
+        found |= {_host(match.group(1)) for match in BARE_DOMAIN.finditer(text)}
+        return sorted(host for host in found if host and not self._url_allowed(host))
+
+    def mentions_money(self, text: str) -> bool:
+        return MONEY.search(text) is not None
+
     def reject(self, reply: str) -> str | None:
         """Причина не отправлять этот текст, либо None."""
+        # Причину читает человек в топике наблюдения, поэтому она называет
+        # переменную: по сообщению должно быть понятно, что делать.
         for match in SCHEME_URL.finditer(reply):
             host = _host(match.group(2))
             if not self._url_allowed(host):
-                return f'ссылка на {host or match.group(1)} вне списка разрешённых'
+                return f'ссылка на {host or match.group(1)} — домена нет в REPLY_URL_ALLOWLIST'
 
         for match in BARE_DOMAIN.finditer(reply):
             host = _host(match.group(1))
             if not self._url_allowed(host):
-                return f'ссылка на {host} вне списка разрешённых'
+                return f'ссылка на {host} — домена нет в REPLY_URL_ALLOWLIST'
 
         money = MONEY.search(reply)
         if money:

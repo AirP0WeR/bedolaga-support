@@ -180,3 +180,9 @@ def test_провайдер_без_кеша_даёт_нули_вместо_none(
         prompt_tokens_details = None
 
     assert _usage(type('R', (), {'usage': NoDetails})()).cached_tokens == 0
+
+
+def test_причина_отбраковки_называет_переменную():
+    """Человек в топике должен понять, что делать, без чтения README."""
+    verdict = sanitize(answer('Статус здесь: https://dash.example.com/'))
+    assert 'REPLY_URL_ALLOWLIST' in verdict.reason

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from . import llm
 from .bedolaga import Bedolaga
 from .config import Config
+from .guard import Guard, build_guard
 from .kb import KnowledgeBase
 from .notify import Notifier
 
@@ -90,6 +91,30 @@ def _check_model(provider, kb_text: str, cfg: Config) -> Step:
     return Step('Модель', OK, f'{cfg.llm_model} {decision}, потрачено {spent} токенов')
 
 
+def _check_reply_filter(guard: Guard, kb_text: str) -> Step:
+    """Что пост-фильтр отбракует на вашей же базе знаний.
+
+    Самая неочевидная настройка сервиса: ссылка есть во FAQ, модель её честно
+    пересказывает, а фильтр отбраковывает ответ. Без этой проверки человек
+    узнаёт о запрете из эскалации вместо ответа — и не понимает, почему.
+    """
+    hosts = guard.unlisted_hosts(kb_text)
+    money = guard.mentions_money(kb_text)
+
+    if not hosts and not money:
+        return Step('Пост-фильтр', OK, 'в базе знаний нет ни ссылок, ни сумм — отбраковывать нечего')
+
+    notes = []
+    if hosts:
+        notes.append(
+            f'в базе знаний есть ссылки ({", ".join(hosts[:5])}) — ответы с ними уйдут оператору. '
+            f'Разрешить: REPLY_URL_ALLOWLIST={",".join(hosts[:5])}'
+        )
+    if money:
+        notes.append('в базе знаний есть суммы — ответы с ценами всегда уходят оператору, это правило не отключается')
+    return Step('Пост-фильтр', WARN, '; '.join(notes))
+
+
 def _check_notifier(notifier: Notifier) -> Step:
     if not notifier.enabled:
         return Step('Наблюдение', WARN, 'TG_BOT_TOKEN или TG_CHAT_ID не заданы — сервис будет работать вслепую')
@@ -109,6 +134,7 @@ def run(cfg: Config) -> bool:
             steps.append(_check_api(api))
             steps.append(_check_kb(kb))
             if steps[-1].status != FAIL:
+                steps.append(_check_reply_filter(build_guard(cfg), kb.text()))
                 steps.append(_check_model(llm.build_provider(cfg), kb.text(), cfg))
             steps.append(_check_notifier(notifier))
         finally:

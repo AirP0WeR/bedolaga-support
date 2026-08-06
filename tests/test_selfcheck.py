@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from app import llm, selfcheck
 from app.config import Config
+from app.guard import Guard
 from app.selfcheck import FAIL, OK, WARN
 
 
@@ -134,3 +135,34 @@ def test_настроенное_наблюдение_шлёт_тестовое_�
 def test_отчёт_читается_строкой():
     line = selfcheck.Step('API бота', OK, 'доступен').line()
     assert 'API бота' in line and OK in line
+
+
+# --- пост-фильтр на своей же базе знаний -------------------------------------
+
+FAQ_WITH_LINK = 'Статус серверов: https://dash.example.com/ и чат t.me/support'
+
+
+def test_ссылки_из_базы_знаний_названы_и_предложены_к_разрешению():
+    """Ради этого шага он и есть: узнать до запуска, а не из первой эскалации."""
+    step = selfcheck._check_reply_filter(Guard(), FAQ_WITH_LINK)
+
+    assert step.status == WARN
+    assert 'dash.example.com' in step.detail
+    assert 'REPLY_URL_ALLOWLIST=dash.example.com,t.me' in step.detail
+
+
+def test_разрешённые_домены_не_попадают_в_предупреждение():
+    guard = Guard(url_allowlist=frozenset({'dash.example.com', 't.me'}))
+    assert selfcheck._check_reply_filter(guard, FAQ_WITH_LINK).status == OK
+
+
+def test_цены_в_базе_знаний_названы_отдельно():
+    step = selfcheck._check_reply_filter(Guard(), 'Тариф «Год» стоит 1200 руб.')
+    assert step.status == WARN
+    assert 'суммы' in step.detail
+    assert 'не отключается' in step.detail
+
+
+def test_база_без_ссылок_и_цен_проходит():
+    step = selfcheck._check_reply_filter(Guard(), 'Откройте бота и нажмите «Подключиться».')
+    assert step.status == OK
