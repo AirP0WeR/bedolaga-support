@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.kb import _render_faq, _strip_html
+from app.kb import _render_faq, _render_local, _strip_html
 
 
 def test_теги_выкидываются_текст_остаётся():
@@ -65,3 +65,21 @@ def test_faq_собирается_заголовками():
 
 def test_faq_без_страниц_пуст():
     assert _render_faq([], 'ru') == ''
+
+
+def test_локальные_гайды_собираются_по_алфавиту(tmp_path):
+    (tmp_path / 'b.md').write_text('вторая тема', encoding='utf-8')
+    (tmp_path / 'a.md').write_text('первая тема', encoding='utf-8')
+    assert _render_local(str(tmp_path)) == 'первая тема\n\nвторая тема'
+
+
+def test_readme_каталога_не_попадает_в_промпт(tmp_path):
+    """В README лежат инструкции для людей и выдуманные примеры."""
+    (tmp_path / 'README.md').write_text('# Локальная база знаний\nЧего сюда не класть...', encoding='utf-8')
+    (tmp_path / 'guide.md').write_text('Не подключается: обновить подписку.', encoding='utf-8')
+
+    assert _render_local(str(tmp_path)) == 'Не подключается: обновить подписку.'
+
+
+def test_отсутствующий_каталог_не_ломает_сборку():
+    assert _render_local('/нет/такого/каталога') == ''

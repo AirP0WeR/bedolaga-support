@@ -100,6 +100,10 @@ def _render_local(kb_dir: str) -> str:
         return ''
     chunks = []
     for path in sorted(root.rglob('*.md')):
+        # README — инструкция для людей, которые ведут базу, и примеры в нём
+        # выдуманы. Модель приняла бы их за факты о сервисе.
+        if path.name.lower() == 'readme.md':
+            continue
         text = path.read_text(encoding='utf-8').strip()
         if text:
             chunks.append(text)
