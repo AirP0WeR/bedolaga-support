@@ -15,6 +15,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from .guard import Guard, build_guard
 from .prompt import VERDICT_SCHEMA, system_prompt, user_prompt
 
 log = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class Verdict:
         return self.action == ANSWER
 
 
-def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int) -> Verdict:
+def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int, guard: Guard | None = None) -> Verdict:
     """Привести ответ модели к вердикту, отбраковав всё сомнительное."""
     action = raw.get('action')
     reply = (raw.get('reply_text') or '').strip()
@@ -70,6 +71,10 @@ def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int) -
             confidence=confidence,
         )
 
+    rejected = guard.reject(reply) if guard else None
+    if rejected:
+        return Verdict(ESCALATE, reason=f'пост-фильтр: {rejected}', topic=topic, confidence=confidence)
+
     return Verdict(ANSWER, reply_text=reply, reason=reason, topic=topic, confidence=confidence)
 
 
@@ -81,6 +86,7 @@ class OpenAIProvider:
         model: str,
         base_url: str | None = None,
         brand: str = '',
+        guard: Guard | None = None,
         timeout: float = 120.0,
     ):
         from openai import OpenAI
@@ -88,6 +94,7 @@ class OpenAIProvider:
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=2)
         self.model = model
         self.brand = brand
+        self.guard = guard
 
     def decide(
         self,
@@ -124,7 +131,12 @@ class OpenAIProvider:
             log.warning('Модель вернула неразбираемый ответ: %.200s', text)
             return Verdict(ESCALATE, reason='неразбираемый ответ модели')
 
-        return _sanitize(raw, confidence_threshold=confidence_threshold, max_reply_chars=max_reply_chars)
+        return _sanitize(
+            raw,
+            confidence_threshold=confidence_threshold,
+            max_reply_chars=max_reply_chars,
+            guard=self.guard,
+        )
 
 
 def build_provider(cfg) -> OpenAIProvider:
@@ -135,4 +147,5 @@ def build_provider(cfg) -> OpenAIProvider:
         model=cfg.llm_model,
         base_url=cfg.openai_base_url,
         brand=cfg.brand_name,
+        guard=build_guard(cfg),
     )

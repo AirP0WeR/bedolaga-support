@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
+from . import guard
+
 load_dotenv()
 
 
@@ -26,6 +28,11 @@ def _opt_int(name: str) -> int | None:
     """Настройка, у которой «не задано» — рабочее значение, а не ноль."""
     raw = os.environ.get(name, '').strip()
     return int(raw) if raw else None
+
+
+def _list(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, '')
+    return tuple(item.strip() for item in raw.split(',') if item.strip())
 
 
 def _float(name: str, default: float) -> float:
@@ -58,6 +65,12 @@ class Config:
     max_ai_replies: int = field(default_factory=lambda: _int('MAX_AI_REPLIES', 2))
     confidence_threshold: float = field(default_factory=lambda: _float('CONFIDENCE_THRESHOLD', 0.7))
     max_reply_chars: int = field(default_factory=lambda: _int('MAX_REPLY_CHARS', 1500))
+
+    # Пост-фильтр ответа (app/guard.py). Пустой allowlist = никаких ссылок.
+    reply_url_allowlist: tuple[str, ...] = field(default_factory=lambda: _list('REPLY_URL_ALLOWLIST'))
+    reply_stopwords: tuple[str, ...] = field(
+        default_factory=lambda: _list('REPLY_STOPWORDS') or guard.DEFAULT_STOPWORDS
+    )
 
     # Наблюдение
     # Сколько сбоев подряд терпим, прежде чем звать человека.

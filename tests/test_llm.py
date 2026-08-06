@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from app.guard import Guard
 from app.llm import ANSWER, ESCALATE, _sanitize
+
+GUARD = Guard()
+ALLOWING_GUARD = Guard(url_allowlist=frozenset({'example.com'}))
 
 OK = {
     'action': 'answer',
@@ -13,8 +17,12 @@ OK = {
 }
 
 
-def sanitize(raw, *, threshold=0.7, max_chars=1500):
-    return _sanitize(raw, confidence_threshold=threshold, max_reply_chars=max_chars)
+def sanitize(raw, *, threshold=0.7, max_chars=1500, guard=GUARD):
+    return _sanitize(raw, confidence_threshold=threshold, max_reply_chars=max_chars, guard=guard)
+
+
+def answer(text: str) -> dict:
+    return {**OK, 'reply_text': text}
 
 
 def test_уверенный_ответ_проходит():
@@ -66,3 +74,79 @@ def test_нечисловая_уверенность_считается_нуле
 
 def test_отсутствующие_поля_не_ломают_разбор():
     assert sanitize({}).action == ESCALATE
+
+
+# --- пост-фильтр -------------------------------------------------------------
+
+
+def test_нормальный_ответ_проходит_фильтр():
+    """Без этого кейса остальные прошли бы и на фильтре, который режет всё."""
+    verdict = sanitize(answer('Откройте бота, нажмите «Моя подписка» → «Подключиться».'))
+    assert verdict.action == ANSWER
+
+
+def test_ссылка_без_разрешения_уводит_к_человеку():
+    verdict = sanitize(answer('Возьмите ссылку тут: https://sub.example.com/abc'))
+    assert verdict.action == ESCALATE
+    assert 'sub.example.com' in verdict.reason
+
+
+def test_разрешённый_домен_проходит():
+    verdict = sanitize(answer('Инструкция: https://example.com/help'), guard=ALLOWING_GUARD)
+    assert verdict.action == ANSWER
+
+
+def test_поддомен_разрешённого_домена_проходит():
+    verdict = sanitize(answer('Смотрите https://help.example.com/vpn'), guard=ALLOWING_GUARD)
+    assert verdict.action == ANSWER
+
+
+def test_чужой_домен_при_непустом_списке_не_проходит():
+    verdict = sanitize(answer('Смотрите https://evil.tld/vpn'), guard=ALLOWING_GUARD)
+    assert verdict.action == ESCALATE
+
+
+def test_домен_без_схемы_тоже_ловится():
+    assert sanitize(answer('Пишите в t.me/support')).action == ESCALATE
+
+
+def test_ссылка_подписки_со_своей_схемой_ловится():
+    verdict = sanitize(answer('Добавьте happ://crypt4/secret в приложение'))
+    assert verdict.action == ESCALATE
+
+
+def test_сумма_в_ответе_уводит_к_человеку():
+    verdict = sanitize(answer('Стоимость продления — 300 руб в месяц.'))
+    assert verdict.action == ESCALATE
+    assert 'сумма' in verdict.reason
+
+
+def test_сумма_перед_числом_тоже_ловится():
+    assert sanitize(answer('Спишется $5 при продлении.')).action == ESCALATE
+
+
+def test_обычные_числа_не_путаются_с_деньгами():
+    verdict = sanitize(answer('На тарифе 100 ГБ и 3 устройства, осталось 12 дней.'))
+    assert verdict.action == ANSWER
+
+
+def test_стоп_слово_уводит_к_человеку():
+    verdict = sanitize(answer('Оформим возврат в течение трёх дней.'))
+    assert verdict.action == ESCALATE
+    assert 'стоп-слово' in verdict.reason
+
+
+def test_стоп_слово_ловится_по_корню():
+    assert sanitize(answer('Компенсация будет начислена автоматически.')).action == ESCALATE
+
+
+def test_свой_список_стоп_слов():
+    guard = Guard(stopwords=('промокод',))
+    assert sanitize(answer('Введите промокод в боте.'), guard=guard).action == ESCALATE
+    assert sanitize(answer('Оформим возврат.'), guard=guard).action == ANSWER
+
+
+def test_причина_отбраковки_доезжает_до_наблюдения():
+    """Причина уходит в аудит и в TG — иначе фильтр молча съедает ответы."""
+    verdict = sanitize(answer('Держите https://sub.example.com/abc'))
+    assert verdict.reason.startswith('пост-фильтр:')
