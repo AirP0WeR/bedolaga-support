@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import context as context_builder
-from . import gate, llm, timeutil
+from . import gate, llm, selfcheck, timeutil
 from .alerts import CYCLE, LLM, Alerts
 from .bedolaga import Bedolaga
 from .config import Config
@@ -347,6 +347,12 @@ def main() -> None:
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format='%(asctime)s %(levelname)s %(name)s %(message)s',
     )
+
+    # Проверка связности идёт до require(): её задача — объяснить, чего не
+    # хватает, а не упасть на первой же незаполненной переменной.
+    if '--check' in sys.argv:
+        sys.exit(0 if selfcheck.run(cfg) else 1)
+
     cfg.require()
 
     service = Service(cfg)
