@@ -152,7 +152,14 @@ class Service:
         # Перечитываем прямо перед отправкой: пока думала модель, в тикет мог
         # прийти живой админ или новое сообщение клиента.
         fresh = self.api.ticket(ticket_id)
-        if gate.decide(fresh, self.store.state(ticket_id), now=datetime.now(UTC)) != gate.ASK_LLM:
+        recheck = gate.decide(
+            fresh,
+            self.store.state(ticket_id),
+            now=datetime.now(UTC),
+            max_ai_replies=self.cfg.max_ai_replies,
+            debounce_sec=self.cfg.debounce_sec,
+        )
+        if recheck != gate.ASK_LLM:
             log.info('Тикет %s изменился, пока думала модель — ответ отменён', ticket_id)
             return
 
