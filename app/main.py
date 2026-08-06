@@ -13,7 +13,7 @@ import logging
 import signal
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import context as context_builder
@@ -26,6 +26,9 @@ from .notify import Notifier
 from .store import Store
 
 log = logging.getLogger('support')
+
+# Защита от двух сводок за один назначенный час: цикл короче часа.
+DIGEST_MIN_GAP_SEC = 23 * 3600
 
 
 class Service:
@@ -47,6 +50,7 @@ class Service:
             after_failures=cfg.alert_after_failures,
             cooldown_sec=cfg.alert_cooldown_sec,
         )
+        self._digest_at: float | None = None
         self._stopping = False
 
     def stop(self, *_args) -> None:
@@ -126,6 +130,7 @@ class Service:
             # Провайдер недоступен — тикет не трогаем совсем. Поведение
             # деградирует ровно до «как без ИИ»: ждёт человека.
             log.warning('Тикет %s: модель недоступна, отложил', ticket_id)
+            self.store.audit(ticket_id, 'llm_error', question=question, reason=verdict.reason)
             self.alerts.failure(LLM, verdict.reason, now=time.monotonic())
             return
 
@@ -228,6 +233,27 @@ class Service:
 
     # --- цикл -------------------------------------------------------------
 
+    def _maybe_digest(self) -> None:
+        """Сводка за сутки — раз в сутки, в назначенный час.
+
+        Час сверяем по стенным часам (в таймзоне API_TZ), а «не чаще раза в
+        сутки» — по монотонному времени: перевод часов не должен приводить ни
+        к двум сводкам за день, ни к пропуску.
+        """
+        if self.cfg.digest_hour is None:
+            return
+
+        now = datetime.now(UTC)
+        if now.astimezone(timeutil.timezone()).hour != self.cfg.digest_hour:
+            return
+
+        moment = time.monotonic()
+        if self._digest_at is not None and moment - self._digest_at < DIGEST_MIN_GAP_SEC:
+            return
+
+        self._digest_at = moment
+        self.notifier.digest(self.store.counters(now - timedelta(days=1)))
+
     def _beat(self) -> None:
         """Отметка «цикл дошёл до конца» для HEALTHCHECK."""
         try:
@@ -262,6 +288,7 @@ class Service:
                 self.alerts.failure(CYCLE, f'{type(error).__name__}: {error}', now=time.monotonic())
             else:
                 self.alerts.success(CYCLE, now=time.monotonic())
+            self._maybe_digest()
             self._beat()
             for _ in range(self.cfg.poll_interval):
                 if self._stopping:

@@ -82,5 +82,29 @@ class Notifier:
     def problem(self, text: str) -> None:
         self._send(f'⚠️ <b>Сбой сервиса поддержки</b>\n{html.escape(_clip(text, 500))}')
 
+    def digest(self, digest) -> None:
+        """Сводка за сутки: одно сообщение, по которому видно, чем занят сервис."""
+        lines = [
+            '📊 <b>Сводка за сутки</b>',
+            f'с {digest.since.strftime("%d.%m %H:%M")} UTC',
+            '',
+            f'Ответов клиентам: {digest.answered}',
+        ]
+        if digest.answered_shadow:
+            lines.append(f'Черновиков (клиенту не ушли): {digest.answered_shadow}')
+        lines.append(f'Передано операторам: {digest.escalated}')
+        if digest.handover:
+            lines.append(f'Тикетов забрали люди: {digest.handover}')
+        if digest.llm_errors:
+            lines.append(f'Ошибок модели: {digest.llm_errors}')
+        if digest.avg_confidence is not None:
+            lines.append(f'Средняя уверенность: {digest.avg_confidence:.2f}')
+        if digest.topics:
+            lines.append('')
+            lines.append('<b>Темы:</b>')
+            lines += [f'· {html.escape(topic)} — {count}' for topic, count in digest.topics]
+
+        self._send('\n'.join(lines))
+
     def recovered(self, text: str) -> None:
         self._send(f'🟢 <b>Сервис поддержки в норме</b>\n{html.escape(_clip(text, 500))}')

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
 from app.store import Store
+
+LONG_AGO = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def test_пустое_состояние_безопасно():
@@ -70,4 +76,60 @@ def test_аудит_считает_действия():
     store.audit(1, 'answer', question='как подключить', reply='вот так', confidence=0.9)
     store.audit(2, 'escalate', reason='деньги')
     store.audit(3, 'escalate', reason='нет ответа в базе')
-    assert store.counters() == {'answer': 1, 'escalate': 2}
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.answered, digest.escalated) == (1, 2)
+
+
+def test_черновики_считаются_отдельно_от_ответов():
+    """В теневом режиме важно не спутать «ответили» с «ответили бы»."""
+    store = Store(':memory:')
+    store.audit(1, 'answer', reply='вот так', confidence=0.9, shadow=True)
+    store.audit(2, 'answer', reply='и так', confidence=0.8)
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.answered, digest.answered_shadow) == (1, 1)
+
+
+def test_сводка_считает_только_свой_период():
+    store = Store(':memory:')
+    store.audit(1, 'answer', confidence=0.9)
+
+    assert store.counters(datetime.now(UTC) + timedelta(seconds=1)).answered == 0
+    assert store.counters(LONG_AGO).answered == 1
+
+
+def test_средняя_уверенность_по_ответам():
+    store = Store(':memory:')
+    store.audit(1, 'answer', confidence=1.0)
+    store.audit(2, 'answer', confidence=0.5)
+    store.audit(3, 'escalate', confidence=0.1)  # эскалации в среднее не входят
+
+    assert store.counters(LONG_AGO).avg_confidence == pytest.approx(0.75)
+
+
+def test_средняя_уверенность_без_ответов_пуста():
+    assert Store(':memory:').counters(LONG_AGO).avg_confidence is None
+
+
+def test_темы_в_порядке_убывания_и_не_больше_пяти():
+    store = Store(':memory:')
+    for topic in ['оплата'] * 3 + ['подключение'] * 2 + ['устройства', 'скорость', 'возврат', 'бан']:
+        store.audit(1, 'answer', topic=topic)
+    store.audit(1, 'answer')  # без темы — в сводку не попадает
+
+    topics = store.counters(LONG_AGO).topics
+
+    assert len(topics) == 5
+    assert topics[0] == ('оплата', 3)
+    assert topics[1] == ('подключение', 2)
+    assert all(topic for topic, _ in topics)
+
+
+def test_ошибки_модели_видны_в_сводке():
+    store = Store(':memory:')
+    store.audit(1, 'llm_error', reason='модель недоступна')
+
+    assert store.counters(LONG_AGO).llm_errors == 1

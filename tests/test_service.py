@@ -62,6 +62,9 @@ class FakeNotifier:
     def problem(self, text: str) -> None:
         self.sent.append('problem')
 
+    def digest(self, digest) -> None:
+        self.sent.append('digest')
+
     def recovered(self, text: str) -> None:
         self.sent.append('recovered')
 
@@ -107,6 +110,7 @@ def build_service(cfg: Config, ticket: dict, verdict: llm.Verdict) -> Service:
     service.kb = FakeKb()
     service.provider = FakeProvider(verdict)
     service.alerts = Alerts(service.notifier, after_failures=3, cooldown_sec=3600)
+    service._digest_at = None
     service._stopping = False
     return service
 
@@ -154,3 +158,30 @@ def test_отлежавшееся_сообщение_при_том_же_конф
     service._answer_or_escalate(service.api.ticket(7), question='Как подключить?', last_message_id=1)
 
     assert service.api.replies == [(7, 'Откройте бота и нажмите «Подключиться».')]
+
+
+def test_сводка_уходит_в_назначенный_час_один_раз():
+    hour = datetime.now(UTC).hour
+    service = build_service(config(digest_hour=hour), ticket_with_message_age(60), llm.Verdict(llm.ESCALATE))
+
+    service._maybe_digest()
+    service._maybe_digest()
+
+    assert service.notifier.sent == ['digest']
+
+
+def test_в_чужой_час_сводки_нет():
+    hour = (datetime.now(UTC).hour + 1) % 24
+    service = build_service(config(digest_hour=hour), ticket_with_message_age(60), llm.Verdict(llm.ESCALATE))
+
+    service._maybe_digest()
+
+    assert service.notifier.sent == []
+
+
+def test_без_настройки_сводка_выключена():
+    service = build_service(config(digest_hour=None), ticket_with_message_age(60), llm.Verdict(llm.ESCALATE))
+
+    service._maybe_digest()
+
+    assert service.notifier.sent == []

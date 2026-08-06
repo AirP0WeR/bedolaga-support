@@ -22,6 +22,12 @@ def _int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _opt_int(name: str) -> int | None:
+    """Настройка, у которой «не задано» — рабочее значение, а не ноль."""
+    raw = os.environ.get(name, '').strip()
+    return int(raw) if raw else None
+
+
 def _float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     return float(raw) if raw else default
@@ -58,6 +64,8 @@ class Config:
     alert_after_failures: int = field(default_factory=lambda: _int('ALERT_AFTER_FAILURES', 3))
     # Не повторяем алерт об одной и той же беде чаще, чем раз в это время.
     alert_cooldown_sec: int = field(default_factory=lambda: _int('ALERT_COOLDOWN_SEC', 3600))
+    # Час (в таймзоне API_TZ), в который уходит суточная сводка. Пусто — не шлём.
+    digest_hour: int | None = field(default_factory=lambda: _opt_int('DIGEST_HOUR'))
     tg_bot_token: str = field(default_factory=lambda: os.environ.get('TG_BOT_TOKEN', ''))
     tg_chat_id: str = field(default_factory=lambda: os.environ.get('TG_CHAT_ID', ''))
     tg_topic_id: str = field(default_factory=lambda: os.environ.get('TG_TOPIC_ID', ''))

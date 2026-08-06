@@ -9,10 +9,26 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .gate import TicketState
+
+
+@dataclass(frozen=True)
+class Digest:
+    """Что сервис сделал за период. Пустой — тоже осмысленный ответ."""
+
+    since: datetime
+    answered: int = 0
+    answered_shadow: int = 0
+    escalated: int = 0
+    handover: int = 0
+    llm_errors: int = 0
+    avg_confidence: float | None = None
+    topics: tuple[tuple[str, int], ...] = field(default_factory=tuple)
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tickets (
@@ -162,6 +178,35 @@ class Store:
             (_now(), ticket_id, action, question, reply, reason, confidence, topic, model, int(shadow)),
         )
 
-    def counters(self) -> dict[str, int]:
-        rows = self._db.execute('SELECT action, COUNT(*) AS n FROM audit GROUP BY action').fetchall()
-        return {row['action']: row['n'] for row in rows}
+    def counters(self, since: datetime) -> Digest:
+        """Сводка по аудиту за период — то, из чего складывается дайджест."""
+        moment = since.astimezone(UTC).isoformat()
+
+        counts: dict[tuple[str, int], int] = {}
+        for row in self._db.execute(
+            'SELECT action, shadow, COUNT(*) AS n FROM audit WHERE ts >= ? GROUP BY action, shadow',
+            (moment,),
+        ):
+            counts[(row['action'], row['shadow'])] = row['n']
+
+        confidence = self._db.execute(
+            "SELECT AVG(confidence) AS avg FROM audit WHERE ts >= ? AND action = 'answer' AND confidence IS NOT NULL",
+            (moment,),
+        ).fetchone()['avg']
+
+        topics = self._db.execute(
+            "SELECT topic, COUNT(*) AS n FROM audit WHERE ts >= ? AND topic <> '' "
+            'GROUP BY topic ORDER BY n DESC, topic LIMIT 5',
+            (moment,),
+        ).fetchall()
+
+        return Digest(
+            since=since,
+            answered=counts.get(('answer', 0), 0),
+            answered_shadow=counts.get(('answer', 1), 0),
+            escalated=counts.get(('escalate', 0), 0),
+            handover=counts.get(('handover', 0), 0),
+            llm_errors=counts.get(('llm_error', 0), 0),
+            avg_confidence=confidence,
+            topics=tuple((row['topic'], row['n']) for row in topics),
+        )
