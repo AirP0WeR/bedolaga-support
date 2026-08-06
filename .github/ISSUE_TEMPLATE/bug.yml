@@ -1,0 +1,69 @@
+name: Что-то работает не так
+description: Сервис ответил не то, промолчал или упал
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Прежде чем писать: если сервис **молчит**, это часто не баг. Проверьте
+        по логам, не отсеяли ли тикет ворота — человек в тикете, эскалация,
+        лимит ответов. Это задуманное поведение.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Что сервис сделал и что ожидалось вместо этого.
+      placeholder: |
+        Ответил клиенту про тариф, которого у нас нет.
+        Ожидал, что передаст оператору: этого тарифа нет ни в FAQ, ни в kb/.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия сервиса
+      description: Тег образа или коммит — `docker compose images support-ai`.
+      placeholder: ghcr.io/airp0wer/bedolada-support:sha-1a2b3c4
+    validations:
+      required: true
+
+  - type: input
+    id: bot
+    attributes:
+      label: Версия бедолаги
+      placeholder: 4.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Модель
+      description: Значение LLM_MODEL, и шлюз, если не напрямую OpenAI.
+      placeholder: gpt-5.6-luna
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Режим
+      options:
+        - Теневой (AI_REPLY_ENABLED=false)
+        - Боевой (AI_REPLY_ENABLED=true)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи и сообщение из топика
+      description: |
+        `docker compose logs --tail 100 support-ai` и сообщение из топика
+        наблюдения по этому тикету, если оно есть.
+        **Вычистите персональные данные клиента и токены.**
+      render: text
+    validations:
+      required: false
