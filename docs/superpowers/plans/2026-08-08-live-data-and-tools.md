@@ -631,7 +631,7 @@ def test_недоступный_кабинет_это_сбой():
 
 **Интерфейсы:**
 - Consumes: `Cabinet.get/post/post_once/account_id` (задача 1.2).
-- Produces (сигнатуры сохраняются): `Bedolaga(cabinet: Cabinet)`; `active_tickets() -> list[dict]`, `ticket(id) -> dict`, `reply(id, text) -> int`, `set_priority(id, priority) -> None`, `user(id) -> dict | None`, `faq_pages(language='ru') -> list[dict]`, `download_media(file_id: str, token: str) -> bytes | None` (изменение: добавился `token`), свойство `service_account_id -> int`. Метод `message_media()` удаляется (медиаданные теперь в самом сообщении тикета), `user_by_telegram_id()` удаляется (никем не используется).
+- Produces (сигнатуры сохраняются): `Bedolaga(cabinet: Cabinet)`; `active_tickets() -> list[dict]`, `ticket(id) -> dict`, `reply(id, text) -> int`, `set_priority(id, priority) -> None`, `user(id) -> dict | None`, `faq_pages(language='ru') -> list[dict]`, `download_media(file_id: str, token: str) -> bytes | None` (изменение: добавился `token`). Метод `message_media()` удаляется (медиаданные теперь в самом сообщении тикета), `user_by_telegram_id()` удаляется (никем не используется).
 
 - [ ] **Шаг 1: переписать тесты `tests/test_bedolaga.py` на кабинетные ручки** (падающие). Хелпер:
 
@@ -667,7 +667,7 @@ def client(handler) -> Bedolaga:
 | `faq_pages` | `GET /cabinet/info/faq` |
 | `download_media` | `GET /cabinet/media/{file_id}` с `params={'token': token}` |
 
-`service_account_id` — прокси к `cabinet.account_id`.
+Свойство `service_account_id` не заводим: воротам оно не нужно (кабинет автора сообщения не отдаёт), а для логов и `--check` есть `cabinet.account_id`.
 
 - [ ] **Шаг 4: тесты зелёные.**
 - [ ] **Шаг 5: коммит**: `git commit -m "bedolaga: переезд на кабинетные ручки поверх cabinet.py"`.
@@ -682,7 +682,7 @@ def client(handler) -> Bedolaga:
 ### Задача 2.4: обвязка — `main.py`, конфиг, алерт о потере доступа
 
 - [ ] **Шаг 1: тесты**:
-  - в `tests/test_service.py`: `Service.handle` передаёт `service_account_id` в `gate.decide` (подделка `FakeApi` получает `service_account_id = 1344`; тикет с нашим кабинетным ответом в `our_message_ids` не уходит в handover — по аналогии с главным тестом ворот, но через `Service.handle`);
+  - в `tests/test_service.py`: тикет в кабинетной форме (у сообщений нет автора), где наш ответ записан в `our_message_ids`, не уходит в handover — тот же случай, что и главный тест ворот, но через `Service.handle`;
   - `CabinetAuthError` в цикле: `run_once`, поймав её, не продолжает перебор тикетов и зовёт `notifier.problem` с первого раза (не после трёх);
   - в `tests/test_alerts.py`: новый вид сбоя с порогом 1 (см. ниже) алертит с первой неудачи.
 - [ ] **Шаг 2: падают.**
@@ -690,7 +690,7 @@ def client(handler) -> Bedolaga:
   - `app/alerts.py`: `failure()` получает необязательный параметр `threshold: int | None = None` — порог для этого вида вместо общего (`AUTH = 'auth'`, `LABELS[AUTH] = 'доступ в кабинет'`);
   - `app/main.py`:
     - конструктор: `self.cabinet = Cabinet(cfg.bedolaga_url, cfg.cabinet_email, cfg.cabinet_password)`, `self.api = Bedolaga(self.cabinet)`; `close()` закрывает и кабинет;
-    - `handle()`: оба вызова `gate.decide(...)` (основной и recheck) получают `service_account_id=self.api.service_account_id`; `_hand_over()` передаёт его в `gate.has_human_admin_message`;
+    - `handle()` и `_hand_over()` менять не нужно: ворота уже разбирают сообщения без автора по состоянию (этап 1), а `_hand_over` учитывает незакрытое намерение ответа;
     - `run_once()`: обёртка
       ```python
       try:
