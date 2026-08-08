@@ -23,6 +23,54 @@
 - **Механизм миграций `store.py`**: новые таблицы добавляются в `SCHEMA` (`CREATE TABLE IF NOT EXISTS`), новые колонки существующих таблиц — в кортеж `MIGRATIONS`. Ничего другого не заводить.
 - **Схема вердикта** используется со `strict: true` — каждое поле обязано быть в `required`, `additionalProperties: false`.
 
+## Формы кабинетного API — сняты с боевого v4.0.0 (2026-08-08)
+
+Этим закрыты открытые вопросы 1-3, 6, 7. Фикстуры тестов пишутся по этим формам.
+
+**Логин** `POST /cabinet/auth/email/login` `{email, password}` →
+`{access_token, refresh_token, token_type: "bearer", expires_in: 900, user{...}, campaign_bonus}`.
+**Обновление** `POST /cabinet/auth/refresh` `{refresh_token}` → та же четвёрка без
+`user`; refresh-токен **ротируется**, новый надо сохранять.
+
+**Список тикетов** `GET /cabinet/admin/tickets` — параметры `page`, `per_page`
+(потолок **100**, по умолчанию 20), `status`, `priority`, `user_id`. Ответ:
+`{items, total, page, pages, per_page}`. Элемент списка: `id, title, status,
+priority, created_at, updated_at, closed_at, messages_count, last_message,
+user{...}` — **без `messages` и без `user_id`**; сообщения берутся деталью, как
+и сейчас (`main.py` уже так устроен: список → `api.ticket(id)`).
+
+**Деталь тикета** `GET /cabinet/admin/tickets/{id}`:
+`{id, title, status, priority, created_at, updated_at, closed_at,
+is_reply_blocked, user{id, telegram_id, email, username, first_name, last_name},
+messages[]}`.
+
+Два отличия от webapi, оба требуют правок:
+- владелец — `user.id`, а не `user_id` (заодно бесплатно приезжает `telegram_id`,
+  он нужен инструментам);
+- блокировка ответов — один булев `is_reply_blocked` вместо пары
+  `user_reply_block_permanent` / `user_reply_block_until`.
+
+**Сообщение тикета** — `{id, message_text, is_from_admin, has_media, media_type,
+media_file_id, media_token, media_caption, media_items, created_at}`.
+
+> **У сообщения НЕТ автора.** Ни `user_id`, ни id админа — только флаг
+> `is_from_admin` (подтверждено схемой `TicketMessageResponse` в боевом образе).
+> Это отменяет посылку задачи 1.1 в первоначальном виде: опознать свой ответ по
+> id служебного аккаунта нельзя. См. переписанную задачу 1.1.
+
+**Транзакции** `GET /cabinet/admin/users/{id}/transactions` — параметры `offset`,
+`limit`, `transaction_type`. Периода нет: фильтр по `days` делаем у себя.
+
+**FAQ** `GET /cabinet/info/faq` — единственный параметр `language`. Ни
+`include_inactive`, ни `fallback` нет; на пустом FAQ отдаёт `[]`.
+
+**Промогруппы** `GET /cabinet/admin/promo-groups` — `server_discount_percent`,
+`traffic_discount_percent`, `device_discount_percent`, `is_default`.
+
+**Докупки** — из детали тарифа (`traffic_topup_enabled`,
+`traffic_topup_packages`, `device_price_kopeks`, `max_device_limit`), глобальный
+тумблер `TRAFFIC_TOPUP_ENABLED` — в категории настроек `TRAFFIC`.
+
 ## Деплой и откат — общая процедура (для каждого этапа)
 
 Сервис живой (wave-tg, `/opt/bedolada-support`, теневой режим `AI_REPLY_ENABLED=false`, топик 14014). Каждый этап — отдельный merge в `main`; workflow `docker.yml` соберёт `ghcr.io/airp0wer/bedolada-support:latest` и неизменяемый `sha-<короткий>`.
@@ -74,110 +122,129 @@ IMAGE=ghcr.io/airp0wer/bedolada-support:sha-<предыдущий> docker compos
 
 **Откат:** предыдущий sha-образ; `.env` можно не трогать.
 
-### Задача 1.1: правка `gate.py` — служебный аккаунт не «чужой админ»
+### Задача 1.1: правка `gate.py` — ворота переживают транспорт без автора
 
 Самый важный тест проекта — пишется первым.
 
-**Интерфейсы:**
-- Produces: `decide(ticket, state, *, now, max_ai_replies=2, debounce_sec=30, service_account_id: int | None = None) -> str`; `has_human_admin_message(ticket, *, service_account_id: int | None = None) -> bool`. Оба параметра опциональны — существующие вызовы и тесты не ломаются.
+**Почему не так, как задумывалось.** Первоначально предполагалось передавать в
+ворота id служебного аккаунта и сравнивать с автором сообщения. Образцы с прода
+показали: **кабинет автора сообщения не отдаёт вообще**. Причём молчаливое
+последствие хуже, чем «признак не работает»: сейчас `_is_foreign_admin_message`
+сравнивает `message.get('user_id')` с владельцем, отсутствующее поле даёт `None`,
+`None != owner_id` — и **каждое** админское сообщение, включая наши собственные,
+станет «чужим». Тикет уходит в чёрный список после первого же нашего ответа.
 
-- [ ] **Шаг 1: написать падающие тесты** — добавить в `tests/test_gate.py`:
+**Решение.** Автор — необязательный признак: если он есть (webapi), работает как
+раньше; если его нет (кабинет), решение принимается по нашему состоянию.
+Отдельный параметр `service_account_id` не нужен — от него отказываемся.
+
+**Интерфейсы:**
+- `_is_foreign_admin_message(message, owner_id, state) -> bool` — сигнатура не
+  меняется, меняется тело.
+- `has_human_admin_message(ticket, state) -> bool` — **добавляется параметр
+  состояния**, иначе под кабинетом функция теряет смысл: без автора любое
+  админское сообщение выглядит «не владельцем», и приоритет перестанет
+  подниматься там, где клиент иначе останется без ответа.
+
+- [ ] **Шаг 1: написать падающие тесты** в `tests/test_gate.py`. Ключевые случаи:
 
 ```python
-SERVICE = 1344  # id служебного аккаунта кабинета
-
-
-# --- служебный аккаунт (кабинетный транспорт) ------------------------------
-
-
-def test_наш_кабинетный_ответ_не_выгоняет_из_тикета():
-    """ГЛАВНЫЙ ТЕСТ ЭТАПА. Кабинетный reply пишет реальный id служебного
-    аккаунта. Без параметра service_account_id такой ответ выглядит чужим
-    админом — и сервис навсегда выходил бы из тикета после первого же
-    собственного ответа."""
-    msgs = [msg(1), msg(2, 'наш ответ', admin=True, user_id=SERVICE), msg(3, 'не помогло')]
+def test_кабинетный_ответ_без_автора_не_выгоняет_из_тикета():
+    """ГЛАВНЫЙ ТЕСТ ЭТАПА. У кабинетного сообщения нет user_id вообще.
+    Наш ответ записан в состоянии — значит он наш, а не чужого админа."""
+    msgs = [msg(1), msg(2, 'наш ответ', admin=True, user_id=None), msg(3, 'не помогло')]
     state = TicketState(our_message_ids=[2])
-    assert decide(ticket(msgs), state, now=NOW, service_account_id=SERVICE) == ASK_LLM
+    assert decide(ticket(msgs), state, now=NOW) == ASK_LLM
 
 
 def test_второй_ответ_после_кабинетного_первого_возможен():
-    """Регресс на MAX_AI_REPLIES=2: раньше до второго ответа не доходило."""
-    msgs = [msg(1), msg(2, 'наш ответ', admin=True, user_id=SERVICE), msg(3, 'а ещё вопрос')]
+    """Регресс на MAX_AI_REPLIES=2."""
+    msgs = [msg(1), msg(2, 'наш ответ', admin=True, user_id=None), msg(3, 'а ещё вопрос')]
     state = TicketState(our_message_ids=[2])
-    assert decide(ticket(msgs), state, now=NOW, max_ai_replies=2, service_account_id=SERVICE) == ASK_LLM
+    assert decide(ticket(msgs), state, now=NOW, max_ai_replies=2) == ASK_LLM
 
 
-def test_настоящий_оператор_из_кабинета_блокирует():
-    msgs = [msg(1), msg(2, 'отвечаю руками', admin=True, user_id=ADMIN)]
-    assert decide(ticket(msgs), TicketState(), now=NOW, service_account_id=SERVICE) == BLACKLIST
+def test_оператор_без_автора_блокирует():
+    """Сообщения нет в нашем списке — значит писали не мы."""
+    msgs = [msg(1), msg(2, 'отвечаю руками', admin=True, user_id=None)]
+    assert decide(ticket(msgs), TicketState(our_message_ids=[]), now=NOW) == BLACKLIST
 
 
-def test_наш_кабинетный_ответ_не_считается_человеком():
-    msgs = [msg(1), msg(2, 'наш ответ', admin=True, user_id=SERVICE)]
-    assert has_human_admin_message(ticket(msgs), service_account_id=SERVICE) is False
-
-
-def test_оператор_при_кабинетном_транспорте_опознаётся_как_человек():
+def test_автор_если_он_есть_работает_как_раньше():
+    """Совместимость с webapi: чужой админ опознаётся по id даже при живом состоянии."""
     msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN)]
-    assert has_human_admin_message(ticket(msgs), service_account_id=SERVICE) is True
+    assert decide(ticket(msgs), TicketState(our_message_ids=[2]), now=NOW) == BLACKLIST
 
 
-def test_потеря_состояния_с_кабинетным_ответом_уводит_в_молчание():
-    """Наш ответ (user_id служебного аккаунта), но записи о нём нет — как и
-    раньше, перекос в молчание: BLACKLIST, а не второй ответ клиенту."""
-    msgs = [msg(1), msg(2, 'потерянный наш ответ', admin=True, user_id=SERVICE), msg(3, 'и что?')]
-    assert decide(ticket(msgs), TicketState(), now=NOW, service_account_id=SERVICE) == BLACKLIST
+def test_человек_опознан_когда_состояние_цело():
+    msgs = [msg(1), msg(2, 'наш', admin=True, user_id=None), msg(3, 'оператор', admin=True, user_id=None)]
+    assert has_human_admin_message(ticket(msgs), TicketState(our_message_ids=[2])) is True
 
 
-def test_без_service_account_id_поведение_прежнее():
-    """Совместимость: пока транспорт не переехал, параметр не передаётся."""
-    msgs = [msg(1), msg(2, 'ответ', admin=True, user_id=SERVICE)]
-    assert decide(ticket(msgs), TicketState(), now=NOW) == BLACKLIST
+def test_при_пустом_состоянии_человек_не_опознан_и_приоритет_поднимется():
+    """Состояние потеряно: отличить свой потерянный ответ от оператора нечем.
+    Безопасный перекос — считать, что человека нет, и поднять приоритет."""
+    msgs = [msg(1), msg(2, 'админское', admin=True, user_id=None)]
+    assert has_human_admin_message(ticket(msgs), TicketState()) is False
 ```
 
-- [ ] **Шаг 2: убедиться, что падают**: `uv run pytest tests/test_gate.py -q` — новые тесты падают с `TypeError: ... unexpected keyword argument 'service_account_id'`.
+- [ ] **Шаг 2: убедиться, что падают** — `uv run pytest tests/test_gate.py -q`.
 
-- [ ] **Шаг 3: реализация в `app/gate.py`**:
+- [ ] **Шаг 3: реализация** в `app/gate.py`:
 
 ```python
-def _is_foreign_admin_message(
-    message: dict, owner_id: int, state: TicketState, service_account_id: int | None = None
-) -> bool:
-    """Админское сообщение, которое писали не мы.
+def _is_foreign_admin_message(message: dict, owner_id: int, state: TicketState) -> bool:
+    """Админское сообщение, которого писали не мы.
 
-    Два независимых признака, и достаточно любого:
-
-    1. `user_id` не совпадает ни с владельцем тикета (обезличенный webapi-ответ),
-       ни со служебным аккаунтом кабинета (наш кабинетный ответ). Признак
-       внешний — переживает потерю нашего состояния.
-    2. Сообщения нет в нашем списке. Ловит других потребителей API, случай,
-       когда админ отвечает в собственный тикет, и наш потерянный ответ.
+    Автор — признак необязательный. Webapi обезличивает наш ответ до владельца
+    тикета, кабинет не отдаёт автора вовсе (`TicketMessageResponse` — только
+    `is_from_admin`). Поэтому: если автор известен и это не владелец — сообщение
+    точно чужое; если автора нет, решает наш список отправленных сообщений.
 
     При потере состояния второй признак сработает и на наши прошлые ответы —
-    тикет уйдёт в чёрный список. Осознанный перекос в молчание.
+    тикет уйдёт в чёрный список. Осознанный перекос в молчание: лучше не
+    ответить, чем вклиниться в чужой разговор или ответить дважды.
     """
     if not message.get('is_from_admin'):
         return False
     author = message.get('user_id')
-    if author != owner_id and (service_account_id is None or author != service_account_id):
+    if author is not None and author != owner_id:
         return True
     return message.get('id') not in state.our_message_ids
 
 
-def has_human_admin_message(ticket: dict, *, service_account_id: int | None = None) -> bool:
+def has_human_admin_message(ticket: dict, state: TicketState) -> bool:
+    """Писал ли в тикет живой человек.
+
+    Отличается от «сообщение не наше»: обезличенный ответ чужой интеграции или
+    наш собственный потерянный ответ выглядят админскими, но человека за ними
+    нет. Нужно, чтобы выход из тикета не оставил клиента без ответа навсегда.
+
+    Без автора (кабинет) человека опознаём по своему состоянию: если мы помним,
+    что отвечали, то лишнее админское сообщение — чужое. Если не помним ничего,
+    честно отвечаем «не знаем» — вызывающий поднимет приоритет.
+    """
     owner_id = ticket.get('user_id')
-    return any(
-        message.get('is_from_admin')
-        and message.get('user_id') != owner_id
-        and (service_account_id is None or message.get('user_id') != service_account_id)
-        for message in ticket.get('messages') or []
-    )
+    messages = [m for m in ticket.get('messages') or [] if m.get('is_from_admin')]
+    if any(m.get('user_id') is not None for m in messages):
+        return any(m.get('user_id') != owner_id for m in messages)
+    if not state.our_message_ids:
+        return False
+    return any(m.get('id') not in state.our_message_ids for m in messages)
 ```
 
-В `decide()` добавить параметр `service_account_id: int | None = None` и передать его в вызов `_is_foreign_admin_message(...)`. Докстринги `decide` и `_is_foreign_admin_message` обновить: упомянуть кабинетный транспорт.
+Вызов в `main.py:251` получает состояние: `gate.has_human_admin_message(ticket, self.store.state(ticket_id))` — состояние там уже читается строкой выше.
 
-- [ ] **Шаг 4: тесты зелёные**: `uv run pytest tests/test_gate.py -q` — все, включая старые.
-- [ ] **Шаг 5: линт и коммит**: `uv run ruff format . && uv run ruff check .`; `git add app/gate.py tests/test_gate.py && git commit -m "gate: служебный аккаунт кабинета не считается чужим админом"`.
+- [ ] **Шаг 4: тесты зелёные** — `uv run pytest -q` целиком, включая старые.
+- [ ] **Шаг 5: линт и коммит** — `uv run ruff format . && uv run ruff check .`;
+      `git commit -m "Ворота: автор сообщения стал необязательным признаком"`.
+
+**Критерий готовности:** зелёный `pytest`, поведение при webapi-транспорте не
+изменилось (старые тесты не правились), а сценарий «кабинетный ответ без автора»
+больше не выгоняет сервис из тикета.
+
+**Откат:** правка изолирована в `gate.py` + вызов в `main.py`, откат — revert
+коммита. На проде поведение не меняется до этапа 2.
 
 ### Задача 1.2: `app/cabinet.py` — логин, пара токенов, перелогин
 
