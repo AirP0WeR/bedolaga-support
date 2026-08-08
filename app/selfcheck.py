@@ -135,7 +135,11 @@ def _check_cabinet(cabinet) -> Step:
     """
     try:
         account_id = cabinet.account_id
-        tariffs = cabinet.get('/cabinet/admin/tariffs').json().get('tariffs', [])
+        response = cabinet.get('/cabinet/admin/tariffs')
+        if response.status_code == 403:
+            return Step('Кабинет', FAIL, f'вошли (id {account_id}), но роли не хватает права tariffs:read')
+        response.raise_for_status()
+        tariffs = response.json().get('tariffs', [])
     except CabinetThrottled as error:
         return Step('Кабинет', WARN, f'вход временно лимитирован: {error}')
     except CabinetAuthError as error:

@@ -206,3 +206,55 @@ def test_обычный_тикет_по_прежнему_перечитывае�
 
     assert service.api.reads > 0
     assert service.api.replies != []
+
+
+# --- выход из тикета под кабинетным транспортом ----------------------------
+
+
+def cabinet_ticket(messages: list[dict]) -> dict:
+    """Тикет в кабинетной форме: у сообщений НЕТ автора."""
+    created = datetime.now(UTC) - timedelta(seconds=600)
+    return {
+        'id': 7,
+        'user_id': 42,
+        'status': 'open',
+        'priority': 'normal',
+        'title': 'Оплата',
+        'messages': [
+            {
+                'id': m['id'],
+                'is_from_admin': m.get('admin', False),
+                'message_text': m.get('text', 'текст'),
+                'created_at': created.isoformat(),
+            }
+            for m in messages
+        ],
+    }
+
+
+def test_оборванный_ответ_поднимает_приоритет_а_не_выдаёт_за_человека(answer):
+    """Ответ ушёл, но записать его мы не успели — это наш обрыв, не оператор.
+
+    Без учёта висящего намерения сервис счёл бы собственное сообщение чужим,
+    сказал бы «тикет ведёт человек» и оставил клиента на обычном приоритете.
+    """
+    ticket = cabinet_ticket([{'id': 1}, {'id': 2, 'admin': True}, {'id': 4, 'admin': True}])
+    service = build_service(config(), ticket, answer)
+    service.store.finish_reply(7, 2)  # первый ответ записан
+    service.store.begin_reply(7)  # второй оборвался
+
+    service._hand_over(ticket)
+
+    assert service.api.priorities == [(7, 'high')]
+    assert service.store.pending_reply(7) is False
+
+
+def test_ответ_оператора_не_поднимает_приоритет(answer):
+    """Висящего намерения нет — значит админское сообщение писал человек."""
+    ticket = cabinet_ticket([{'id': 1}, {'id': 2, 'admin': True}, {'id': 3, 'admin': True}])
+    service = build_service(config(), ticket, answer)
+    service.store.finish_reply(7, 2)
+
+    service._hand_over(ticket)
+
+    assert service.api.priorities == []

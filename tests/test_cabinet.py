@@ -285,3 +285,63 @@ def test_успешный_вход_сбрасывает_выдержку():
     api.get('/cabinet/admin/tickets')
 
     assert api._throttle_sec == 60  # стартовое значение вернулось
+
+
+# --- ретраи: ответ клиенту идёт другим клиентом ---------------------------
+
+
+def two_client_cabinet(handler_retry, handler_once) -> Cabinet:
+    """Кабинет, у которого клиенты с ретраями и без разведены по транспортам.
+
+    Общий хелпер `cabinet()` подменяет оба клиента одним и тем же — на нём
+    подмена `post_once` на `post` осталась бы незамеченной.
+    """
+    api = Cabinet('http://bot', EMAIL, PASSWORD)
+    api.close()
+    api._http = httpx.Client(base_url='http://bot', transport=httpx.MockTransport(handler_retry))
+    api._http_once = httpx.Client(base_url='http://bot', transport=httpx.MockTransport(handler_once))
+    return api
+
+
+def test_ответ_клиенту_идёт_без_транспортных_ретраев():
+    """post_once обязан ходить клиентом без ретраев: повтор — второе сообщение."""
+    retried: list[str] = []
+    once: list[str] = []
+
+    def with_retries(request: httpx.Request) -> httpx.Response:
+        retried.append(request.url.path)
+        return httpx.Response(200, json={})
+
+    def without_retries(request: httpx.Request) -> httpx.Response:
+        once.append(request.url.path)
+        if request.url.path.endswith('/login'):
+            return httpx.Response(200, json=tokens('a1'))
+        return httpx.Response(201, json={'message': {'id': 5}})
+
+    api = two_client_cabinet(with_retries, without_retries)
+
+    api.post_once('/cabinet/admin/tickets/7/reply', json={'message': 'привет'})
+
+    assert '/cabinet/admin/tickets/7/reply' in once
+    assert retried == []
+
+
+def test_идемпотентный_post_идёт_клиентом_с_ретраями():
+    retried: list[str] = []
+    once: list[str] = []
+
+    def with_retries(request: httpx.Request) -> httpx.Response:
+        retried.append(request.url.path)
+        return httpx.Response(200, json={})
+
+    def without_retries(request: httpx.Request) -> httpx.Response:
+        once.append(request.url.path)
+        return httpx.Response(200, json=tokens('a1'))
+
+    api = two_client_cabinet(with_retries, without_retries)
+
+    api.post('/cabinet/admin/tickets/7/priority', json={'priority': 'high'})
+
+    assert retried == ['/cabinet/admin/tickets/7/priority']
+    # Вход и обновление токена всегда идут клиентом без ретраев.
+    assert once == ['/cabinet/auth/email/login']

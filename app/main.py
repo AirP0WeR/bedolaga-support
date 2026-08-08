@@ -249,14 +249,28 @@ class Service:
         if state.human_seen:
             return
 
-        human = gate.has_human_admin_message(ticket, state)
+        # Незакрытое намерение сильнее любых догадок: значит чужое на вид
+        # админское сообщение — наш собственный оборванный ответ. Кабинет
+        # автора не отдаёт, и без этой проверки мы бы записали свой обрыв в
+        # «тикет ведёт человек» и оставили клиента на обычном приоритете.
+        interrupted = self.store.pending_reply(ticket_id)
+        if interrupted:
+            self.store.clear_reply_intent(ticket_id)
+
+        human = False if interrupted else gate.has_human_admin_message(ticket, state)
         self.store.mark_human(ticket_id)
 
         if not human:
             self.api.set_priority(ticket_id, 'high')
             self.store.mark_escalated(ticket_id)
 
-        self.store.audit(ticket_id, 'handover', reason='человек в тикете' if human else 'неопознанный ответ админа')
+        if human:
+            reason = 'человек в тикете'
+        elif interrupted:
+            reason = 'прерванная отправка ответа'
+        else:
+            reason = 'неопознанный ответ админа'
+        self.store.audit(ticket_id, 'handover', reason=reason)
         self.notifier.handed_over(ticket_id, escalated=not human)
 
     # --- цикл -------------------------------------------------------------

@@ -87,11 +87,18 @@ def has_human_admin_message(ticket: dict, state: TicketState) -> bool:
     """
     owner_id = ticket.get('user_id')
     messages = [message for message in ticket.get('messages') or [] if message.get('is_from_admin')]
-    if any(message.get('user_id') is not None for message in messages):
-        return any(message.get('user_id') != owner_id for message in messages)
+
+    # Сообщения с автором и без него разбираем каждое своим признаком: в одном
+    # тикете могут лежать и те и другие — например, если транспорт переключился
+    # между нашими ответами.
+    authored = [message for message in messages if message.get('user_id') is not None]
+    if any(message.get('user_id') != owner_id for message in authored):
+        return True
+
+    anonymous = [message for message in messages if message.get('user_id') is None]
     if not state.our_message_ids:
         return False
-    return any(message.get('id') not in state.our_message_ids for message in messages)
+    return any(message.get('id') not in state.our_message_ids for message in anonymous)
 
 
 def _taken_by_human(ticket: dict) -> bool:

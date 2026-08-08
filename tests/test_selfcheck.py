@@ -174,10 +174,17 @@ def test_база_без_ссылок_и_цен_проходит():
 class FakeCabinet:
     """Кабинет для самопроверки: логин уже произошёл, запросы отвечают заранее."""
 
-    def __init__(self, account_id: int = 1344, tariffs: int = 5, error: Exception | None = None):
+    def __init__(
+        self,
+        account_id: int = 1344,
+        tariffs: int = 5,
+        error: Exception | None = None,
+        status_code: int = 200,
+    ):
         self._account_id = account_id
         self._tariffs = tariffs
         self._error = error
+        self._status_code = status_code
 
     @property
     def account_id(self) -> int:
@@ -188,19 +195,25 @@ class FakeCabinet:
     def get(self, path, *, params=None):
         if self._error:
             raise self._error
-        return _Response({'tariffs': [{'id': i} for i in range(self._tariffs)]})
+        payload = (
+            {'tariffs': [{'id': i} for i in range(self._tariffs)]}
+            if self._status_code == 200
+            else {'detail': 'Forbidden'}
+        )
+        return _Response(payload, self._status_code)
 
 
 class _Response:
-    def __init__(self, payload):
+    def __init__(self, payload, status_code: int = 200):
         self._payload = payload
-        self.status_code = 200
+        self.status_code = status_code
 
     def json(self):
         return self._payload
 
     def raise_for_status(self):
-        return None
+        if self.status_code >= 400:
+            raise RuntimeError(f'HTTP {self.status_code}')
 
 
 def test_кабинет_пускает_и_роль_видит_тарифы():
@@ -229,3 +242,20 @@ def test_без_кредов_кабинета_предупреждение_а_н
     cfg = replace(Config(), cabinet_email='', cabinet_password='')
     step = selfcheck._check_cabinet_config(cfg)
     assert step.status == WARN
+
+
+def test_роли_без_права_на_тарифы_это_сбой_а_не_ноль_тарифов():
+    """403 на каталоге — ровно тот отказ, ради которого проверка и написана.
+
+    Тело ошибки FastAPI разбирается как JSON, и без проверки статуса шаг
+    отрапортовал бы «OK, тарифов: 0» — ложное «готово к запуску».
+    """
+    step = selfcheck._check_cabinet(FakeCabinet(status_code=403))
+    assert step.status == FAIL
+    assert 'tariffs:read' in step.detail
+
+
+def test_недоступный_кабинет_это_сбой():
+    step = selfcheck._check_cabinet(FakeCabinet(error=OSError('connection refused')))
+    assert step.status == FAIL
+    assert 'OSError' in step.detail
