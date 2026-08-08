@@ -49,14 +49,16 @@ def _reply_block_active(ticket: dict, now: datetime) -> bool:
 def _is_foreign_admin_message(message: dict, owner_id: int, state: TicketState) -> bool:
     """Админское сообщение, которого писали не мы.
 
-    Два независимых признака, и достаточно любого:
+    Автор сообщения — признак **необязательный**, и это принципиально:
 
-    1. `user_id` не совпадает с владельцем тикета. Ответы из админки и кабинета
-       пишут реальный id админа, а ответы через webapi обезличены до владельца
-       (app/webapi/routes/tickets.py:216). Признак внешний — переживает потерю
-       нашего состояния.
-    2. Сообщения нет в нашем списке. Ловит и других потребителей webapi, и
-       случай, когда админ отвечает в собственный тикет.
+    - webapi обезличивает наш ответ до владельца тикета
+      (app/webapi/routes/tickets.py:216), поэтому автор, не равный владельцу, —
+      это точно кто-то другой;
+    - кабинет автора не отдаёт вовсе: в `TicketMessageResponse` есть только
+      `is_from_admin`. Сравнивать нечего, решает наш список отправленных.
+
+    Отсюда порядок: если автор известен и это не владелец — сообщение чужое;
+    иначе смотрим, есть ли сообщение в нашем списке.
 
     При потере состояния второй признак сработает и на наши прошлые ответы —
     тикет уйдёт в чёрный список. Это осознанный перекос в молчание: лучше не
@@ -64,24 +66,32 @@ def _is_foreign_admin_message(message: dict, owner_id: int, state: TicketState) 
     """
     if not message.get('is_from_admin'):
         return False
-    if message.get('user_id') != owner_id:
+    author = message.get('user_id')
+    if author is not None and author != owner_id:
         return True
     return message.get('id') not in state.our_message_ids
 
 
-def has_human_admin_message(ticket: dict) -> bool:
+def has_human_admin_message(ticket: dict, state: TicketState) -> bool:
     """Писал ли в тикет живой человек.
 
-    Отличается от «сообщение не наше»: ответ через webapi обезличен до
-    владельца тикета, поэтому чужая интеграция или наш же потерянный ответ
-    выглядят как админские, но человека за ними нет. Нужно для того, чтобы
-    выход из тикета не превратился в вечное молчание без единого зовущего
-    человека сигнала.
+    Отличается от «сообщение не наше»: обезличенный ответ чужой интеграции или
+    наш собственный потерянный ответ выглядят админскими, но человека за ними
+    нет. Нужно для того, чтобы выход из тикета не превратился в вечное молчание
+    без единого зовущего человека сигнала.
+
+    Когда автор известен (webapi) — судим по нему. Когда автора нет (кабинет) —
+    по своему состоянию: помним, что отвечали, значит лишнее админское
+    сообщение чужое. Не помним ничего — честно отвечаем «человека не видно»,
+    и вызывающий поднимет приоритет.
     """
     owner_id = ticket.get('user_id')
-    return any(
-        message.get('is_from_admin') and message.get('user_id') != owner_id for message in ticket.get('messages') or []
-    )
+    messages = [message for message in ticket.get('messages') or [] if message.get('is_from_admin')]
+    if any(message.get('user_id') is not None for message in messages):
+        return any(message.get('user_id') != owner_id for message in messages)
+    if not state.our_message_ids:
+        return False
+    return any(message.get('id') not in state.our_message_ids for message in messages)
 
 
 def _taken_by_human(ticket: dict) -> bool:

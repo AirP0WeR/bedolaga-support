@@ -47,6 +47,22 @@ def msg(
     }
 
 
+def cab_msg(mid: int, text: str = 'вопрос', *, admin: bool = False, age_sec: int = 600):
+    """Сообщение в том виде, в каком его отдаёт кабинет: автора в нём НЕТ.
+
+    Ключа `user_id` не существует вовсе — это подтверждено схемой
+    `TicketMessageResponse` боевого бота: только `is_from_admin`.
+    """
+    return {
+        'id': mid,
+        'message_text': text,
+        'is_from_admin': admin,
+        'has_media': False,
+        'media_type': None,
+        'created_at': (NOW - timedelta(seconds=age_sec)).isoformat(),
+    }
+
+
 def ticket(messages, *, priority: str = 'normal', status: str = 'open', **kwargs):
     return {
         'id': 1,
@@ -215,12 +231,12 @@ def test_потеря_состояния_уводит_в_молчание_а_н�
 
 def test_за_потерянным_ответом_человека_нет():
     msgs = [msg(1), msg(2, 'обезличенный ответ', admin=True)]
-    assert has_human_admin_message(ticket(msgs)) is False
+    assert has_human_admin_message(ticket(msgs), TicketState()) is False
 
 
 def test_живой_админ_опознаётся():
     msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN)]
-    assert has_human_admin_message(ticket(msgs)) is True
+    assert has_human_admin_message(ticket(msgs), TicketState()) is True
 
 
 # --- статус pending -------------------------------------------------------
@@ -264,3 +280,51 @@ def test_медиа_без_типа_эскалируем():
 def test_непарсибельная_дата_не_блокирует_обработку():
     msgs = [{**msg(1, 'вопрос'), 'created_at': 'позавчера'}]
     assert run(ticket(msgs)) == ASK_LLM
+
+
+# --- кабинетный транспорт: у сообщения нет автора --------------------------
+
+
+def test_кабинетный_ответ_без_автора_не_выгоняет_из_тикета():
+    """ГЛАВНЫЙ ТЕСТ ЭТАПА.
+
+    Кабинет не отдаёт автора сообщения. Без правки `None != owner_id` делает
+    чужим любое админское сообщение, включая наше собственное, и сервис уходит
+    из тикета после первого же своего ответа. Наш ответ записан в состоянии —
+    значит он наш.
+    """
+    msgs = [cab_msg(1), cab_msg(2, 'наш ответ', admin=True), cab_msg(3, 'не помогло')]
+    assert run(ticket(msgs), TicketState(our_message_ids=[2])) == ASK_LLM
+
+
+def test_второй_ответ_после_кабинетного_первого_возможен():
+    """Регресс на MAX_AI_REPLIES=2: без правки до второго ответа не доходило."""
+    msgs = [cab_msg(1), cab_msg(2, 'наш ответ', admin=True), cab_msg(3, 'а ещё вопрос')]
+    assert run(ticket(msgs), TicketState(our_message_ids=[2])) == ASK_LLM
+
+
+def test_кабинетный_ответ_оператора_блокирует():
+    """Сообщения нет в нашем списке — писали не мы, выходим из тикета."""
+    msgs = [cab_msg(1), cab_msg(2, 'отвечаю руками', admin=True)]
+    assert run(ticket(msgs), TicketState(our_message_ids=[])) == BLACKLIST
+
+
+def test_автор_если_он_есть_работает_как_раньше():
+    """Совместимость с webapi: чужой админ опознаётся по id и при живом состоянии."""
+    msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN)]
+    assert run(ticket(msgs), TicketState(our_message_ids=[2])) == BLACKLIST
+
+
+def test_человек_опознан_когда_состояние_цело():
+    msgs = [cab_msg(1), cab_msg(2, 'наш', admin=True), cab_msg(3, 'оператор', admin=True)]
+    assert has_human_admin_message(ticket(msgs), TicketState(our_message_ids=[2])) is True
+
+
+def test_при_пустом_состоянии_человек_не_опознан():
+    """Состояние потеряно: отличить свой потерянный ответ от оператора нечем.
+
+    Безопасный перекос — считать, что человека нет: вызывающий поднимет
+    приоритет, и тикет не зависнет.
+    """
+    msgs = [cab_msg(1), cab_msg(2, 'админское', admin=True)]
+    assert has_human_admin_message(ticket(msgs), TicketState()) is False

@@ -245,10 +245,11 @@ class Service:
         без ответа навсегда — поэтому поднимаем приоритет.
         """
         ticket_id = ticket['id']
-        if self.store.state(ticket_id).human_seen:
+        state = self.store.state(ticket_id)
+        if state.human_seen:
             return
 
-        human = gate.has_human_admin_message(ticket)
+        human = gate.has_human_admin_message(ticket, state)
         self.store.mark_human(ticket_id)
 
         if not human:
