@@ -25,7 +25,10 @@ from .kb import KnowledgeBase
 from .notify import Notifier
 from .store import Store
 
-log = logging.getLogger(__name__)
+# Имя задано явно: модуль запускается как `python -m app.main`, и `__name__`
+# у него — `__main__`. В логе рядом с app.cabinet и app.kb это выглядело бы
+# инородно.
+log = logging.getLogger('app.main')
 
 # Защита от двух сводок за один назначенный час: цикл короче часа.
 DIGEST_MIN_GAP_SEC = 23 * 3600
