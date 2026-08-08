@@ -48,6 +48,12 @@ class Config:
     # Таймзона дат, которые API отдал без таймзоны. См. app/timeutil.py.
     api_tz: str = field(default_factory=lambda: os.environ.get('API_TZ', 'UTC'))
 
+    # Кабинет: служебный аккаунт с ролью «AI Support». Пока не обязателен —
+    # сервис ходит по webapi-токену; станет обязательным, когда транспорт
+    # переедет на кабинетные ручки.
+    cabinet_email: str = field(default_factory=lambda: os.environ.get('CABINET_EMAIL', ''))
+    cabinet_password: str = field(default_factory=lambda: os.environ.get('CABINET_PASSWORD', ''))
+
     # LLM
     llm_provider: str = field(default_factory=lambda: os.environ.get('LLM_PROVIDER', 'openai'))
     llm_model: str = field(default_factory=lambda: os.environ.get('LLM_MODEL', ''))

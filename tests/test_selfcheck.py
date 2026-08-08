@@ -166,3 +166,66 @@ def test_цены_в_базе_знаний_названы_отдельно():
 def test_база_без_ссылок_и_цен_проходит():
     step = selfcheck._check_reply_filter(Guard(), 'Откройте бота и нажмите «Подключиться».')
     assert step.status == OK
+
+
+# --- доступ в кабинет -----------------------------------------------------
+
+
+class FakeCabinet:
+    """Кабинет для самопроверки: логин уже произошёл, запросы отвечают заранее."""
+
+    def __init__(self, account_id: int = 1344, tariffs: int = 5, error: Exception | None = None):
+        self._account_id = account_id
+        self._tariffs = tariffs
+        self._error = error
+
+    @property
+    def account_id(self) -> int:
+        if self._error:
+            raise self._error
+        return self._account_id
+
+    def get(self, path, *, params=None):
+        if self._error:
+            raise self._error
+        return _Response({'tariffs': [{'id': i} for i in range(self._tariffs)]})
+
+
+class _Response:
+    def __init__(self, payload):
+        self._payload = payload
+        self.status_code = 200
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        return None
+
+
+def test_кабинет_пускает_и_роль_видит_тарифы():
+    step = selfcheck._check_cabinet(FakeCabinet(account_id=1344, tariffs=5))
+    assert step.status == OK
+    assert '1344' in step.detail
+    assert '5' in step.detail
+
+
+def test_кабинет_не_пускает_это_сбой_а_не_предупреждение():
+    from app.cabinet import CabinetAuthError
+
+    step = selfcheck._check_cabinet(FakeCabinet(error=CabinetAuthError('HTTP 401')))
+    assert step.status == FAIL
+    assert 'пароль' in step.detail.lower() or 'роль' in step.detail.lower()
+
+
+def test_лимит_входа_отличается_от_отказа_в_доступе():
+    from app.cabinet import CabinetThrottled
+
+    step = selfcheck._check_cabinet(FakeCabinet(error=CabinetThrottled('выдержка 60 с')))
+    assert step.status == WARN
+
+
+def test_без_кредов_кабинета_предупреждение_а_не_сбой():
+    cfg = replace(Config(), cabinet_email='', cabinet_password='')
+    step = selfcheck._check_cabinet_config(cfg)
+    assert step.status == WARN

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from . import llm
 from .bedolaga import Bedolaga
+from .cabinet import Cabinet, CabinetAuthError, CabinetThrottled
 from .config import Config
 from .guard import Guard, build_guard
 from .kb import KnowledgeBase
@@ -115,6 +116,35 @@ def _check_reply_filter(guard: Guard, kb_text: str) -> Step:
     return Step('Пост-фильтр', WARN, '; '.join(notes))
 
 
+def _check_cabinet_config(cfg: Config) -> Step:
+    if not (cfg.cabinet_email and cfg.cabinet_password):
+        return Step(
+            'Кабинет',
+            WARN,
+            'CABINET_EMAIL или CABINET_PASSWORD не заданы — сервис работает по webapi-токену, '
+            'каталог тарифов и список устройств будут недоступны',
+        )
+    return Step('Кабинет', OK, 'учётные данные заданы')
+
+
+def _check_cabinet(cabinet) -> Step:
+    """Пускает ли кабинет и хватает ли роли.
+
+    Проверяем не только вход: роль без `tariffs:read` пустит в кабинет, но
+    каталог не отдаст — а именно за ним сервис туда и ходит.
+    """
+    try:
+        account_id = cabinet.account_id
+        tariffs = cabinet.get('/cabinet/admin/tariffs').json().get('tariffs', [])
+    except CabinetThrottled as error:
+        return Step('Кабинет', WARN, f'вход временно лимитирован: {error}')
+    except CabinetAuthError as error:
+        return Step('Кабинет', FAIL, f'не пускает — проверьте пароль и роль служебного аккаунта: {error}')
+    except Exception as error:
+        return Step('Кабинет', FAIL, f'{type(error).__name__}: {error}')
+    return Step('Кабинет', OK, f'вошли служебным аккаунтом id {account_id}, роль видит тарифов: {len(tariffs)}')
+
+
 def _check_notifier(notifier: Notifier) -> Step:
     if not notifier.enabled:
         return Step('Наблюдение', WARN, 'TG_BOT_TOKEN или TG_CHAT_ID не заданы — сервис будет работать вслепую')
@@ -132,6 +162,13 @@ def run(cfg: Config) -> bool:
         notifier = Notifier(bot_token=cfg.tg_bot_token, chat_id=cfg.tg_chat_id, topic_id=cfg.tg_topic_id)
         try:
             steps.append(_check_api(api))
+            steps.append(_check_cabinet_config(cfg))
+            if steps[-1].status == OK:
+                cabinet = Cabinet(cfg.bedolaga_url, cfg.cabinet_email, cfg.cabinet_password)
+                try:
+                    steps[-1] = _check_cabinet(cabinet)
+                finally:
+                    cabinet.close()
             steps.append(_check_kb(kb))
             if steps[-1].status != FAIL:
                 steps.append(_check_reply_filter(build_guard(cfg), kb.text()))
