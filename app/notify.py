@@ -83,6 +83,22 @@ class Notifier:
         """Нейтральное сообщение: проверка связи, а не событие по тикету."""
         self._send(f'🤖 <b>Сервис поддержки</b>\n{html.escape(_clip(text, 500))}')
 
+    def started(self, *, version: str, shadow: bool, model: str, poll_interval: int, kb_chars: int) -> None:
+        """Сервис поднялся и готов разбирать тикеты.
+
+        Перезапуск виден там же, где решения сервиса: иначе единственным
+        признаком живости остаётся healthcheck контейнера, которого в топике
+        никто не видит. Заодно сразу отвечает на вопрос «а в каком он режиме
+        сейчас» — самый частый при разборе «почему клиенту не ответили».
+        """
+        mode = 'боевой — отвечаем клиентам' if not shadow else 'теневой — клиенту не пишем'
+        self._send(
+            f'🟢 <b>Сервис поддержки запущен</b>\n'
+            f'Версия {html.escape(version)} · режим {mode}\n'
+            f'Модель {html.escape(model)} · опрос раз в {poll_interval} с\n'
+            f'База знаний: {kb_chars} символов'
+        )
+
     def problem(self, text: str) -> None:
         self._send(f'⚠️ <b>Сбой сервиса поддержки</b>\n{html.escape(_clip(text, 500))}')
 

@@ -61,6 +61,9 @@ class FakeNotifier:
     def handed_over(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('handed_over')
 
+    def started(self, **kwargs) -> None:
+        self.sent.append('started')
+
     def problem(self, text: str) -> None:
         self.sent.append('problem')
 
@@ -258,3 +261,68 @@ def test_ответ_оператора_не_поднимает_приорите�
     service._hand_over(ticket)
 
     assert service.api.priorities == []
+
+
+# --- уведомление о старте -------------------------------------------------
+
+
+def test_старт_виден_в_топике(answer):
+    """Перезапуск сервиса должен быть заметен там же, где его решения.
+
+    Иначе единственный признак живости — healthcheck контейнера, которого
+    в топике не видно.
+    """
+    service = build_service(config(), ticket_with_message_age(600), answer)
+
+    service._announce_start()
+
+    assert 'started' in service.notifier.sent
+
+
+def test_в_уведомлении_о_старте_видны_режим_и_модель(answer):
+    service = build_service(config(reply_enabled=False), ticket_with_message_age(600), answer)
+    captured: list[dict] = []
+    service.notifier.started = lambda **kwargs: captured.append(kwargs)
+
+    service._announce_start()
+
+    assert captured[0]['shadow'] is True
+    assert captured[0]['model'] == 'test-model'
+
+
+# --- логирование ----------------------------------------------------------
+
+
+def test_шум_httpx_гасится_на_обычном_уровне(monkeypatch):
+    """На INFO httpx писал строку на каждый запрос — свои сообщения тонули."""
+    import logging
+
+    from app import main as main_module
+
+    for name in ('httpx', 'httpcore', 'openai'):
+        logging.getLogger(name).setLevel(logging.NOTSET)
+    monkeypatch.setattr(main_module.sys, 'argv', ['app', '--check'])
+    monkeypatch.setattr(main_module.selfcheck, 'run', lambda cfg: True)
+
+    with pytest.raises(SystemExit):
+        main_module.main()
+
+    assert logging.getLogger('httpx').level == logging.WARNING
+
+
+def test_на_debug_запросы_видны(monkeypatch):
+    """Отладка не должна требовать правки кода: LOG_LEVEL=DEBUG возвращает httpx."""
+    import logging
+
+    from app import main as main_module
+
+    for name in ('httpx', 'httpcore', 'openai'):
+        logging.getLogger(name).setLevel(logging.NOTSET)
+    monkeypatch.setenv('LOG_LEVEL', 'DEBUG')
+    monkeypatch.setattr(main_module.sys, 'argv', ['app', '--check'])
+    monkeypatch.setattr(main_module.selfcheck, 'run', lambda cfg: True)
+
+    with pytest.raises(SystemExit):
+        main_module.main()
+
+    assert logging.getLogger('httpx').level == logging.NOTSET

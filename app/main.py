@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import context as context_builder
-from . import gate, llm, selfcheck, timeutil
+from . import gate, llm, selfcheck, timeutil, version
 from .alerts import CYCLE, LLM, Alerts
 from .bedolaga import Bedolaga
 from .config import Config
@@ -25,7 +25,7 @@ from .kb import KnowledgeBase
 from .notify import Notifier
 from .store import Store
 
-log = logging.getLogger('support')
+log = logging.getLogger(__name__)
 
 # Защита от двух сводок за один назначенный час: цикл короче часа.
 DIGEST_MIN_GAP_SEC = 23 * 3600
@@ -320,6 +320,24 @@ class Service:
         except OSError:
             log.warning('Не удалось обновить heartbeat', exc_info=True)
 
+    def _announce_start(self) -> None:
+        """Сказать в лог и в топик, что сервис поднялся и в каком он режиме."""
+        mode = 'боевой' if self.cfg.reply_enabled else 'теневой (клиенту не отвечаем)'
+        log.info(
+            'Старт %s, режим %s, модель %s, опрос раз в %s с',
+            version.read(),
+            mode,
+            self.provider.model,
+            self.cfg.poll_interval,
+        )
+        self.notifier.started(
+            version=version.read(),
+            shadow=not self.cfg.reply_enabled,
+            model=self.provider.model,
+            poll_interval=self.cfg.poll_interval,
+            kb_chars=len(self.kb.text()),
+        )
+
     def run_once(self) -> None:
         for ticket in self.api.active_tickets():
             if self._stopping:
@@ -336,8 +354,7 @@ class Service:
 
         self._maybe_purge()
 
-        mode = 'боевой' if self.cfg.reply_enabled else 'теневой (клиенту не отвечаем)'
-        log.info('Старт, режим %s, модель %s, опрос раз в %s с', mode, self.provider.model, self.cfg.poll_interval)
+        self._announce_start()
 
         while not self._stopping:
             try:
@@ -358,10 +375,17 @@ class Service:
 
 def main() -> None:
     cfg = Config()
-    logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
-        format='%(asctime)s %(levelname)s %(name)s %(message)s',
-    )
+    level = getattr(logging, cfg.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=level, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+
+    # httpx на INFO пишет строку на каждый запрос. При опросе раз в минуту это
+    # пара тысяч строк в сутки, среди которых тонут собственные сообщения
+    # сервиса, — а ротация лога съедается впустую. Оставляем только неудачи;
+    # кому нужны сами запросы, тот ставит LOG_LEVEL=DEBUG.
+    if level > logging.DEBUG:
+        logging.getLogger('httpx').setLevel(logging.WARNING)
+        logging.getLogger('httpcore').setLevel(logging.WARNING)
+        logging.getLogger('openai').setLevel(logging.WARNING)
 
     # Проверка связности идёт до require(): её задача — объяснить, чего не
     # хватает, а не упасть на первой же незаполненной переменной.
