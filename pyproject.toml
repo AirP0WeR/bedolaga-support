@@ -26,6 +26,10 @@ package = false
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# В docs/ лежат спеки и планы с иллюстративными кусками кода: там методы класса
+# показаны в отрыве от класса, и форматтер честно снимает у них отступ, ломая
+# смысл. Документы — не исходники, ruff их не касается.
+extend-exclude = ["docs"]
 
 [tool.ruff.format]
 quote-style = 'single'
