@@ -285,7 +285,7 @@
   not supported for gpt-5.6-luna … use /v1/responses or set reasoning_effort to
   'none'`;
 - `/v1/responses` + `tools` → корректный `function_call get_payments
-  {"only_unfinished":true}` с сохранённым reasoning.
+  {"days":14}` с сохранённым reasoning.
 
 Значит инструменты на текущем `chat.completions` доступны только ценой
 отключения reasoning — а именно на нём модель выигрывала прогон: честно занижала
