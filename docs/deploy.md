@@ -39,8 +39,8 @@ docker inspect <контейнер_бота> -f '{{range $k,$v := .NetworkSettin
 ## 3. Забрать репозиторий и заполнить настройки
 
 ```bash
-git clone https://github.com/AirP0WeR/bedolada-support.git
-cd bedolada-support
+git clone https://github.com/AirP0WeR/bedolaga-support.git
+cd bedolaga-support
 cp .env.example .env
 nano .env
 ```
@@ -173,7 +173,7 @@ docker compose up -d
 ## Обновление
 
 ```bash
-cd bedolada-support && git pull
+cd bedolaga-support && git pull
 docker compose pull && docker compose up -d
 ```
 
@@ -184,7 +184,7 @@ docker compose pull && docker compose up -d
 У каждого коммита есть неизменяемый тег образа:
 
 ```bash
-IMAGE=ghcr.io/airp0wer/bedolada-support:sha-1a2b3c4 docker compose up -d
+IMAGE=ghcr.io/airp0wer/bedolaga-support:sha-1a2b3c4 docker compose up -d
 ```
 
 Состояние в `data/` переживает откат: сервис не ответит второй раз в тикеты,

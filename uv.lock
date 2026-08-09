@@ -25,8 +25,8 @@ wheels = [
 ]
 
 [[package]]
-name = "bedolada-support"
-version = "0.2.0"
+name = "bedolaga-support"
+version = "0.2.1"
 source = { virtual = "." }
 dependencies = [
     { name = "httpx" },

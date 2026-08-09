@@ -73,14 +73,14 @@ media_file_id, media_token, media_caption, media_items, created_at}`.
 
 ## Деплой и откат — общая процедура (для каждого этапа)
 
-Сервис живой (wave-tg, `/opt/bedolada-support`, теневой режим `AI_REPLY_ENABLED=false`, топик 14014). Каждый этап — отдельный merge в `main`; workflow `docker.yml` соберёт `ghcr.io/airp0wer/bedolada-support:latest` и неизменяемый `sha-<короткий>`.
+Сервис живой (wave-tg, `/opt/bedolaga-support`, теневой режим `AI_REPLY_ENABLED=false`, топик 14014). Каждый этап — отдельный merge в `main`; workflow `docker.yml` соберёт `ghcr.io/airp0wer/bedolaga-support:latest` и неизменяемый `sha-<короткий>`.
 
 Выкат этапа:
 
 ```bash
-cd /opt/bedolada-support
+cd /opt/bedolaga-support
 # запомнить текущий образ для отката
-docker inspect bedolada-support -f '{{.Config.Image}}' > /tmp/prev-image
+docker inspect bedolaga-support -f '{{.Config.Image}}' > /tmp/prev-image
 docker compose pull
 docker compose run --rm support-ai python -m app.main --check   # до up -d
 docker compose up -d && docker compose logs -f --tail 50
@@ -89,7 +89,7 @@ docker compose up -d && docker compose logs -f --tail 50
 Откат этапа (одинаков для всех, если у этапа не сказано иного):
 
 ```bash
-IMAGE=ghcr.io/airp0wer/bedolada-support:sha-<предыдущий> docker compose up -d
+IMAGE=ghcr.io/airp0wer/bedolaga-support:sha-<предыдущий> docker compose up -d
 ```
 
 Состояние в `data/` переживает откаты. `.env`-переменные, добавленные этапами, старому образу не мешают — он их не читает.
@@ -116,7 +116,7 @@ IMAGE=ghcr.io/airp0wer/bedolada-support:sha-<предыдущий> docker compos
 - Modify: `app/gate.py`, `tests/test_gate.py`, `app/config.py`, `app/selfcheck.py`, `tests/test_selfcheck.py`, `.env.example`
 - Поведение обработки тикетов **не меняется**: `bedolaga.py` пока на `X-API-Key`.
 
-**Проверка на бою:** креды уже лежат в `/opt/bedolada-support/.env` (`CABINET_EMAIL`/`CABINET_PASSWORD`, аккаунт id 1344, роль id 6). После выката `--check` печатает новую строку `[OK] Кабинет: вход выполнен, служебный аккаунт id 1344`. Тикеты обрабатываются как раньше.
+**Проверка на бою:** креды уже лежат в `/opt/bedolaga-support/.env` (`CABINET_EMAIL`/`CABINET_PASSWORD`, аккаунт id 1344, роль id 6). После выката `--check` печатает новую строку `[OK] Кабинет: вход выполнен, служебный аккаунт id 1344`. Тикеты обрабатываются как раньше.
 
 **Критерий готовности:** тесты зелёные (в т.ч. главный тест ворот), `--check` на проде показывает вход в кабинет, поведение тикетов не изменилось за сутки наблюдения в топике.
 
@@ -1590,7 +1590,7 @@ TG_LIMIT = 4096
 
 **Файлы:**
 - Modify: `kb/README.md`, `docs/deploy.md`, `README.md`, `CHANGELOG.md`, `pyproject.toml` (версия 0.2.0), `.env.example` (финальная сверка)
-- Прод (не в git): `/opt/bedolada-support/kb/local/*.md`, `/opt/bedolada-support/.env`
+- Прод (не в git): `/opt/bedolaga-support/kb/local/*.md`, `/opt/bedolaga-support/.env`
 
 **Проверка на бою:** финальная приёмка ниже.
 
@@ -1622,7 +1622,7 @@ TG_LIMIT = 4096
 ### Задача 8.3: релиз и приёмка на реальных данных
 
 - [ ] **Шаг 1**: Actions → Релиз → `0.2.0` (workflow проверит pyproject и CHANGELOG, поставит тег, соберёт образ `0.2.0` и `v0.2.0-<sha>`).
-- [ ] **Шаг 2**: на проде зафиксировать образ релиза: `IMAGE=ghcr.io/airp0wer/bedolada-support:v0.2.0-<sha> docker compose up -d`.
+- [ ] **Шаг 2**: на проде зафиксировать образ релиза: `IMAGE=ghcr.io/airp0wer/bedolaga-support:v0.2.0-<sha> docker compose up -d`.
 - [ ] **Шаг 3: приёмка** — воспроизвести тикеты #82, #83, #84 (и три старых из архива аудита) тестовыми обращениями, сравнить с тем, что сервис делал раньше (старые решения — в `audit`):
   - **#84** (увеличить трафик, платил бы за 1 ТБ): черновик называет `FAMILY` — 600 ГБ, 6 устройств — и максимум `STANDART`/безлимит `AI`; цены из снимка не отбраковываются. Это явный критерий из спеки.
   - **#83** (когда вывод рефералки): черновик отвечает состоянием фичи из настроек (выключен, минимум, кулдаун), без эскалации «сроки не указаны в базе».

@@ -182,7 +182,7 @@ def run(cfg: Config) -> bool:
             api.close()
             notifier.close()
 
-    print('\nПроверка bedolada-support\n')
+    print('\nПроверка bedolaga-support\n')
     for step in steps:
         print(step.line())
 

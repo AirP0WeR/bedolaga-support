@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Инструкция по установке
-    url: https://github.com/AirP0WeR/bedolada-support/blob/main/docs/deploy.md
+    url: https://github.com/AirP0WeR/bedolaga-support/blob/main/docs/deploy.md
     about: Пошаговый деплой и таблица типовых ошибок — большинство вопросов закрывается здесь

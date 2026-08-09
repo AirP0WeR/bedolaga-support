@@ -25,7 +25,7 @@ body:
     attributes:
       label: Версия сервиса
       description: Тег образа или коммит — `docker compose images support-ai`.
-      placeholder: ghcr.io/airp0wer/bedolada-support:sha-1a2b3c4
+      placeholder: ghcr.io/airp0wer/bedolaga-support:sha-1a2b3c4
     validations:
       required: true
 

@@ -1,7 +1,7 @@
-# bedolada-support
+# bedolaga-support
 
-[![CI](https://github.com/AirP0WeR/bedolada-support/actions/workflows/ci.yml/badge.svg)](https://github.com/AirP0WeR/bedolada-support/actions/workflows/ci.yml)
-[![Образ](https://github.com/AirP0WeR/bedolada-support/actions/workflows/docker.yml/badge.svg)](https://github.com/AirP0WeR/bedolada-support/actions/workflows/docker.yml)
+[![CI](https://github.com/AirP0WeR/bedolaga-support/actions/workflows/ci.yml/badge.svg)](https://github.com/AirP0WeR/bedolaga-support/actions/workflows/ci.yml)
+[![Образ](https://github.com/AirP0WeR/bedolaga-support/actions/workflows/docker.yml/badge.svg)](https://github.com/AirP0WeR/bedolaga-support/actions/workflows/docker.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Лицензия MIT](https://img.shields.io/badge/license-MIT-green)
 
@@ -17,7 +17,7 @@
 ## Как работает
 
 ```
-Клиент ──► бедолага ◄── опрос раз в 60 с ── bedolada-support
+Клиент ──► бедолага ◄── опрос раз в 60 с ── bedolaga-support
                      ── ответ / приоритет ──►     │
                                                   ├─► OpenAI (FAQ в кеш-префиксе + скриншоты)
                                                   ├─► SQLite (состояние, аудит)
@@ -60,7 +60,7 @@ API не обнуляла базу.
 **[docs/deploy.md](docs/deploy.md)**, коротко:
 
 ```bash
-git clone https://github.com/AirP0WeR/bedolada-support.git && cd bedolada-support
+git clone https://github.com/AirP0WeR/bedolaga-support.git && cd bedolaga-support
 cp .env.example .env && nano .env          # токены бота и модели, имя сети бота
 mkdir -p data && chown 1000:1000 data      # контейнер работает не от root
 
@@ -251,7 +251,7 @@ uv lock --upgrade-package openai         # обновить одну завис�
 ## Образ
 
 Собирается в GHCR при пуше в `main` и на тегах `v*.*.*`:
-`ghcr.io/airp0wer/bedolada-support`. Теги — `latest` с main, неизменяемый
+`ghcr.io/airp0wer/bedolaga-support`. Теги — `latest` с main, неизменяемый
 `sha-<коммит>`, а на релизах `X.Y.Z`, `X.Y` и `vX.Y.Z-<sha>`.
 
 Релиз выпускается кнопкой: **Actions → Релиз → Run workflow**, номер версии

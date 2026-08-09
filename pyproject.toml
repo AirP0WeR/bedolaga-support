@@ -1,6 +1,6 @@
 [project]
-name = "bedolada-support"
-version = "0.2.0"
+name = "bedolaga-support"
+version = "0.2.1"
 description = "ИИ-автоответчик на тикеты встроенной поддержки бота bedolaga"
 requires-python = ">=3.12"
 dependencies = [

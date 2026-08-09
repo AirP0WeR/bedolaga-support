@@ -42,12 +42,12 @@ jobs:
           context: .
           push: false
           load: true
-          tags: bedolada-support:pr
+          tags: bedolaga-support:pr
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Образ запускается и видит свой код
-        run: docker run --rm bedolada-support:pr python -c "import app.main, app.healthcheck"
+        run: docker run --rm bedolaga-support:pr python -c "import app.main, app.healthcheck"
 
   build:
     if: github.event_name != 'pull_request'
@@ -90,7 +90,7 @@ jobs:
             type=raw,value=${{ steps.ver.outputs.minor }},enable=${{ inputs.version != '' }}
             type=raw,value=v${{ inputs.version }}-{{sha}},enable=${{ inputs.version != '' }}
           labels: |
-            org.opencontainers.image.title=bedolada-support
+            org.opencontainers.image.title=bedolaga-support
             org.opencontainers.image.description=ИИ-автоответчик на тикеты поддержки бота bedolaga
 
       - name: Сборка и публикация

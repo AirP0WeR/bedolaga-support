@@ -2,9 +2,9 @@ services:
   support-ai:
     # На сервере тянем готовый образ из GHCR, локально можно собрать:
     #   docker compose build
-    image: ${IMAGE:-ghcr.io/airp0wer/bedolada-support:latest}
+    image: ${IMAGE:-ghcr.io/airp0wer/bedolaga-support:latest}
     build: .
-    container_name: bedolada-support
+    container_name: bedolaga-support
     restart: unless-stopped
     env_file: .env
     # Обращение к модели идёт до 120 с. Дефолтные 10 с гарантируют SIGKILL
