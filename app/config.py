@@ -11,6 +11,14 @@ from . import guard
 
 load_dotenv()
 
+# Клиент OpenAI читает OPENAI_BASE_URL из окружения сам, мимо этих настроек.
+# Пустая строка (а `.env` со строкой `OPENAI_BASE_URL=` — обычное дело) даёт ему
+# пустой base_url, и каждый вызов падает с APIConnectionError про отсутствующий
+# протокол. Сбой выглядит сетевым: httpx до api.openai.com при этом доходит.
+# Поэтому пустое значение убираем из окружения целиком, а не только из настроек.
+if os.environ.get('OPENAI_BASE_URL', '').strip() == '':
+    os.environ.pop('OPENAI_BASE_URL', None)
+
 
 def _bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
