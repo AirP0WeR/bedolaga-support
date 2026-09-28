@@ -38,6 +38,7 @@ class Usage:
 class Verdict:
     action: str
     reply_text: str = ''
+    draft_text: str = ''
     reason: str = ''
     topic: str = ''
     confidence: float = 0.0
@@ -49,7 +50,12 @@ class Verdict:
 
 
 def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int, guard: Guard | None = None) -> Verdict:
-    """Привести ответ модели к вердикту, отбраковав всё сомнительное."""
+    """Привести ответ модели к вердикту, отбраковав всё сомнительное.
+
+    Текст модели при эскалации никогда не попадает в `reply_text` (его отправляют
+    клиенту) — только в `draft_text`, черновик для оператора. Так забракованный
+    или неуверенный ответ не может случайно уйти клиенту тем же путём, что настоящий.
+    """
     action = raw.get('action')
     reply = (raw.get('reply_text') or '').strip()
     reason = (raw.get('reason') or '').strip()
@@ -59,31 +65,24 @@ def _sanitize(raw: dict, *, confidence_threshold: float, max_reply_chars: int, g
     except (TypeError, ValueError):
         confidence = 0.0
 
+    def escalate(reason: str) -> Verdict:
+        return Verdict(ESCALATE, draft_text=reply, reason=reason, topic=topic, confidence=confidence)
+
     if action != ANSWER:
-        return Verdict(ESCALATE, reason=reason or 'модель передала оператору', topic=topic, confidence=confidence)
+        return escalate(reason or 'модель передала оператору')
 
     if not reply:
-        return Verdict(ESCALATE, reason='пустой ответ модели', topic=topic, confidence=confidence)
+        return escalate('пустой ответ модели')
 
     if len(reply) > max_reply_chars:
-        return Verdict(
-            ESCALATE,
-            reason=f'ответ длиннее допустимого ({len(reply)} символов)',
-            topic=topic,
-            confidence=confidence,
-        )
+        return escalate(f'ответ длиннее допустимого ({len(reply)} символов)')
 
     if confidence < confidence_threshold:
-        return Verdict(
-            ESCALATE,
-            reason=f'низкая уверенность {confidence:.2f} (порог {confidence_threshold})',
-            topic=topic,
-            confidence=confidence,
-        )
+        return escalate(f'низкая уверенность {confidence:.2f} (порог {confidence_threshold})')
 
     rejected = guard.reject(reply) if guard else None
     if rejected:
-        return Verdict(ESCALATE, reason=f'пост-фильтр: {rejected}', topic=topic, confidence=confidence)
+        return escalate(f'пост-фильтр: {rejected}')
 
     return Verdict(ANSWER, reply_text=reply, reason=reason, topic=topic, confidence=confidence)
 

@@ -36,19 +36,24 @@ def test_низкая_уверенность_уводит_к_человеку():
     verdict = sanitize({**OK, 'confidence': 0.4})
     assert verdict.action == ESCALATE
     assert 'уверенность' in verdict.reason
+    # Оператору всё равно достаётся черновик — это и есть смысл эскалации с черновиком.
+    assert verdict.draft_text == OK['reply_text']
 
 
 def test_пустой_текст_уводит_к_человеку():
-    assert sanitize({**OK, 'reply_text': '   '}).action == ESCALATE
+    verdict = sanitize({**OK, 'reply_text': '   '})
+    assert verdict.action == ESCALATE
+    assert verdict.draft_text == ''
 
 
 def test_слишком_длинный_ответ_уводит_к_человеку():
     verdict = sanitize({**OK, 'reply_text': 'а' * 2000})
     assert verdict.action == ESCALATE
     assert 'длиннее' in verdict.reason
+    assert verdict.draft_text == 'а' * 2000
 
 
-def test_явная_эскалация_не_несёт_текста_клиенту():
+def test_явная_эскалация_несёт_черновик_но_не_клиенту():
     verdict = sanitize(
         {
             'action': 'escalate',
@@ -59,7 +64,9 @@ def test_явная_эскалация_не_несёт_текста_клиент
         }
     )
     assert verdict.action == ESCALATE
+    # reply_text клиенту не уходит никаким путём — черновик живёт в отдельном поле.
     assert verdict.reply_text == ''
+    assert verdict.draft_text == 'передаю оператору'
 
 
 def test_мусорное_действие_уводит_к_человеку():
@@ -150,6 +157,8 @@ def test_причина_отбраковки_доезжает_до_наблюд�
     """Причина уходит в аудит и в TG — иначе фильтр молча съедает ответы."""
     verdict = sanitize(answer('Держите https://sub.example.com/abc'))
     assert verdict.reason.startswith('пост-фильтр:')
+    # Забракованный ответ клиенту всё равно годится оператору как черновик.
+    assert verdict.draft_text == 'Держите https://sub.example.com/abc'
 
 
 # --- расход токенов -----------------------------------------------------------

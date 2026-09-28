@@ -156,6 +156,7 @@ class Service:
                 reason=verdict.reason,
                 topic=verdict.topic,
                 usage=verdict.usage,
+                draft=verdict.draft_text,
             )
             self.store.set_last_decided(ticket_id, last_message_id)
             return
@@ -231,12 +232,15 @@ class Service:
         reason: str,
         topic: str = '',
         usage: llm.Usage | None = None,
+        draft: str = '',
     ) -> None:
         self.api.set_priority(ticket_id, 'high')
         self.store.mark_escalated(ticket_id)
         # Токены на эскалацию тоже потрачены — иначе расход в сводке занижен.
-        self.store.audit(ticket_id, 'escalate', question=question, reason=reason, topic=topic, usage=usage)
-        self.notifier.escalated(ticket_id, question=question, reason=reason)
+        # Черновик кладём в ту же колонку `reply`, что и настоящие ответы: это
+        # неотправленный клиенту вариант, для аудита достаточно одного поля.
+        self.store.audit(ticket_id, 'escalate', question=question, reply=draft, reason=reason, topic=topic, usage=usage)
+        self.notifier.escalated(ticket_id, question=question, reason=reason, draft=draft)
         log.info('Тикет %s: передан оператору (%s)', ticket_id, reason)
 
     def _hand_over(self, ticket: dict) -> None:

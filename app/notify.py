@@ -67,12 +67,14 @@ class Notifier:
             f'<b>Ответ:</b>\n{html.escape(_clip(reply))}'
         )
 
-    def escalated(self, ticket_id: int, *, question: str, reason: str) -> None:
+    def escalated(self, ticket_id: int, *, question: str, reason: str, draft: str = '') -> None:
+        draft_block = f'\n\n<b>Черновик для оператора:</b>\n{html.escape(_clip(draft))}' if draft else ''
         self._send(
             f'🔺 <b>Передан оператору</b>\n'
             f'Тикет #{ticket_id} · приоритет high\n\n'
             f'<b>Вопрос:</b>\n{html.escape(_clip(question))}\n\n'
             f'<b>Причина:</b> {html.escape(_clip(reason, 200))}'
+            f'{draft_block}'
         )
 
     def handed_over(self, ticket_id: int, *, escalated: bool) -> None:
