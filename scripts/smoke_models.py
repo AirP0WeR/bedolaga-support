@@ -2,6 +2,7 @@
 
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -10,6 +11,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.llm import OpenAIProvider
+
+# Дата в фактах аккаунта — от текущего момента, а не зашита в прошлое: иначе
+# полгода спустя кейс молча превращается в «просроченная подписка».
+EXPIRY_DAYS = 40
+EXPIRY = (datetime.now(UTC) + timedelta(days=EXPIRY_DAYS)).strftime('%d.%m.%Y')
+ACCOUNT_ACTIVE = f'Подписка: active\nТариф: Год\nДействует до: {EXPIRY} ({EXPIRY_DAYS} дн.)'
 
 KB = """\
 # FAQ
@@ -34,7 +41,7 @@ CASES = [
             'title': 'Подключение',
             'question': 'Как подключить на айфоне?',
             'conversation': 'Клиент: Как подключить на айфоне?',
-            'account': 'Подписка: active\nТариф: Год\nДействует до: 14.09.2026 (40 дн.)',
+            'account': ACCOUNT_ACTIVE,
             'images': [],
         },
         'answer',
@@ -89,7 +96,7 @@ CASES = [
             'title': 'Срок',
             'question': 'До какого числа у меня оплачено?',
             'conversation': 'Клиент: До какого числа у меня оплачено?',
-            'account': 'Подписка: active\nТариф: Год\nДействует до: 14.09.2026 (40 дн.)',
+            'account': ACCOUNT_ACTIVE,
             'images': [],
         },
         'answer',
