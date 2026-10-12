@@ -45,7 +45,7 @@ def callback(draft_id: int) -> dict:
 
 def receiver(api: FakeApi) -> tuple[ButtonReceiver, Store, list[str], list[tuple]]:
     """Приёмник с подменённым Telegram: ответы и снятия кнопки пишутся в списки."""
-    box = ButtonReceiver(bot_token='token', api=api, store_path=':memory:', guard=Guard())
+    box = ButtonReceiver(bot_token='token', api=api, store_path=':memory:', guard=Guard(), notifier=FakeNotifier())
     store = box._store
     answers: list[str] = []
     stripped: list[tuple[int, int]] = []
@@ -128,3 +128,58 @@ def test_причина_отказа_закрытый_тикет():
 
 def test_чистому_тексту_ничего_не_мешает():
     assert refusal_reason(TICKET, 'Обновите приложение и повторите', Guard()) is None
+
+
+# --- конфликт с вебхуком -----------------------------------------------------
+
+
+class FakeNotifier:
+    def __init__(self):
+        self.problems: list[str] = []
+
+    def problem(self, text: str) -> None:
+        self.problems.append(text)
+
+
+class FakeResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.text = ''
+
+    def json(self) -> dict:
+        return {}
+
+
+class FakeHttp:
+    def __init__(self, status_code: int):
+        self._status_code = status_code
+        self.calls = 0
+
+    def get(self, *args, **kwargs) -> FakeResponse:
+        self.calls += 1
+        return FakeResponse(self._status_code)
+
+
+def test_конфликт_с_вебхуком_ждёт_и_кричит_в_топик_один_раз():
+    """409 — это поломка, о которой человек узнаёт из топика, а не из логов."""
+    api = FakeApi(TICKET)
+    box, _, _, _ = receiver(api)
+    box._http = FakeHttp(409)
+
+    updates, wait = box._poll()
+    box._poll()
+
+    assert updates == []
+    assert wait >= 30
+    assert len(box._notifier.problems) == 1
+    assert box._http.calls == 2
+
+
+def test_обычная_ошибка_даёт_короткую_паузу():
+    api = FakeApi(TICKET)
+    box, _, _, _ = receiver(api)
+    box._http = FakeHttp(500)
+
+    _, wait = box._poll()
+
+    assert 0 < wait < 30

@@ -466,6 +466,7 @@ class Service:
                 api=self.api,
                 store_path=self.cfg.state_path,
                 guard=self.guard,
+                notifier=self.notifier,
             )
             receiver.start()
         try:

@@ -41,6 +41,9 @@ CALLBACK_PREFIX = 'd:'
 POLL_TIMEOUT_SEC = 10
 # Пауза между попытками, когда Telegram недоступен.
 RETRY_SEC = 3
+# Пауза при конфликте с вебхуком: сам он не рассосётся, и молотить запросами
+# незачем — раз в минуту достаточно.
+CONFLICT_WAIT_SEC = 60
 
 
 def refusal_reason(ticket: dict, text: str, guard: Guard) -> str | None:
@@ -66,10 +69,11 @@ def refusal_reason(ticket: dict, text: str, guard: Guard) -> str | None:
 class ButtonReceiver:
     """Слушает нажатия кнопок у бота-наблюдателя и отправляет черновики."""
 
-    def __init__(self, *, bot_token: str, api: Bedolaga, store_path: str, guard: Guard):
+    def __init__(self, *, bot_token: str, api: Bedolaga, store_path: str, guard: Guard, notifier):
         self._token = bot_token
         self._api = api
         self._guard = guard
+        self._notifier = notifier
         # своё подключение к той же базе: sqlite3-подключение чужому потоку
         # отдавать нельзя, а WAL пропускает одновременную запись с ожиданием.
         self._store = Store(store_path)
@@ -77,6 +81,7 @@ class ButtonReceiver:
         self._http = httpx.Client(timeout=POLL_TIMEOUT_SEC + 15.0)
         self._stop = threading.Event()
         self._offset: int | None = None
+        self._webhook_alerted = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -92,17 +97,32 @@ class ButtonReceiver:
 
     # --- Telegram API -----------------------------------------------------
 
-    def _get_updates(self) -> list[dict]:
+    def _poll(self) -> tuple[list[dict], float]:
+        """Один запрос к Telegram: обновления и пауза до следующего."""
         params: dict = {'timeout': POLL_TIMEOUT_SEC, 'allowed_updates': json.dumps(['callback_query'])}
         if self._offset is not None:
             params['offset'] = self._offset
         response = self._http.get(f'{API}/bot{self._token}/getUpdates', params=params)
+
+        if response.status_code == 409:
+            # У бота из настроек висит вебхук — как правило, это токен
+            # основного бота, у которого свой канал обновлений. Кнопки не
+            # заработают, пока токен не сменить, и об этом обязан узнать
+            # человек, а не только лог контейнера.
+            if not self._webhook_alerted:
+                self._webhook_alerted = True
+                self._notifier.problem(
+                    'Кнопка «Отправить клиенту» не работает: у бота из TG_BOT_TOKEN активен вебхук, '
+                    'Telegram не отдаёт нажатия (HTTP 409). Нужен токен бота без вебхука.'
+                )
+            log.warning('Кнопка: getUpdates конфликтует с вебхуком бота (HTTP 409)')
+            return [], CONFLICT_WAIT_SEC
+
         if response.status_code >= 400:
-            # Чаще всего это 409: кто-то ещё поллит этого бота или повесил
-            # вебхук. Кнопки не заработают, пока конфликт не убрать.
             log.warning('Кнопка: getUpdates ответил HTTP %s %s', response.status_code, response.text[:200])
-            return []
-        return response.json().get('result', [])
+            return [], RETRY_SEC
+
+        return response.json().get('result', []), 0.0
 
     def _answer(self, callback_id: str, text: str) -> None:
         self._post('answerCallbackQuery', {'callback_query_id': callback_id, 'text': text})
@@ -130,12 +150,10 @@ class ButtonReceiver:
         log.info('Кнопка отправки: слушаю нажатия')
         while not self._stop.is_set():
             try:
-                updates = self._get_updates()
+                updates, wait = self._poll()
             except Exception:
-                if not self._stop.is_set():
-                    log.warning('Кнопка: не удалось получить нажатия', exc_info=True)
-                    self._stop.wait(RETRY_SEC)
-                continue
+                log.warning('Кнопка: не удалось получить нажатия', exc_info=True)
+                updates, wait = [], RETRY_SEC
 
             for update in updates:
                 self._offset = update['update_id'] + 1
@@ -147,6 +165,9 @@ class ButtonReceiver:
                 except Exception:
                     log.exception('Кнопка: обработка нажатия упала')
                     self._answer(callback.get('id') or '', 'Внутренняя ошибка — отправьте текст вручную')
+
+            if wait:
+                self._stop.wait(wait)
         log.info('Кнопка отправки: остановлена')
 
     def _handle(self, callback: dict) -> None:
