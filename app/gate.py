@@ -125,6 +125,37 @@ def _unanswered_client_messages(messages: list[dict]) -> list[dict]:
     return list(reversed(tail))
 
 
+def decide_human_assist(ticket: dict, *, now: datetime, debounce_sec: int = 30) -> str:
+    """Решение для тикета, который ведёт человек: делать ли черновик оператору.
+
+    Те же ворота, но вопрос другой — не «можно ли ответить клиенту», а «есть ли
+    что предложить оператору». Записи в тикет отсюда не бывает в принципе,
+    поэтому правил меньше: закрытый тикет, отсутствие нового сообщения клиента,
+    свежесть (клиент может дописывать) и вложения, которые модель не читает, —
+    по ним черновик был бы догадкой, а не помощью.
+    """
+    if ticket.get('status') == 'closed':
+        return SKIP
+
+    messages = ticket.get('messages') or []
+    if not messages:
+        return SKIP
+
+    last = messages[-1]
+    if last.get('is_from_admin'):
+        return SKIP
+
+    created_at = parse_dt(last.get('created_at'))
+    if created_at is not None and (now - created_at).total_seconds() < debounce_sec:
+        return DEFER
+
+    for message in _unanswered_client_messages(messages):
+        if message.get('has_media') and message.get('media_type') != READABLE_MEDIA:
+            return SKIP
+
+    return ASK_LLM
+
+
 def decide(
     ticket: dict,
     state: TicketState,

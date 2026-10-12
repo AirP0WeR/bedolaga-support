@@ -95,6 +95,17 @@ def test_черновики_считаются_отдельно_от_ответ�
     assert (digest.answered, digest.answered_shadow) == (1, 1)
 
 
+def test_черновики_оператору_считаются_отдельно():
+    """Помощь человеку в его тикете — не ответ клиенту и не эскалация."""
+    store = Store(':memory:')
+    store.audit(1, 'assist', question='не помогло', reply='черновик', topic='подключение')
+    store.audit(2, 'escalate', reason='деньги')
+
+    digest = store.counters(LONG_AGO)
+
+    assert (digest.assisted, digest.escalated, digest.answered) == (1, 1, 0)
+
+
 def test_сводка_считает_только_свой_период():
     store = Store(':memory:')
     store.audit(1, 'answer', confidence=0.9)

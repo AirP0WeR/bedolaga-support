@@ -17,6 +17,10 @@ log = logging.getLogger(__name__)
 
 # Телеграм режет сообщения длиннее 4096 символов.
 MAX_FIELD = 700
+# Черновик для оператора не влезает в обычный лимит: его собираются копировать
+# целиком, и обрезанный текст теряет смысл. Потолок подобран под 4096 вместе
+# с остальными полями сообщения.
+MAX_DRAFT = 3000
 
 
 def _clip(text: str, limit: int = MAX_FIELD) -> str:
@@ -68,13 +72,30 @@ class Notifier:
         )
 
     def escalated(self, ticket_id: int, *, question: str, reason: str, draft: str = '') -> None:
-        draft_block = f'\n\n<b>Черновик для оператора:</b>\n{html.escape(_clip(draft))}' if draft else ''
+        # Черновик в <pre>: моно-блок в Telegram копируется одним нажатием,
+        # и оператору не приходится выделять текст пальцем по абзацу.
+        draft_block = (
+            f'\n\n<b>Черновик для оператора:</b>\n<pre>{html.escape(_clip(draft, MAX_DRAFT))}</pre>' if draft else ''
+        )
         self._send(
             f'🔺 <b>Передан оператору</b>\n'
             f'Тикет #{ticket_id} · приоритет high\n\n'
             f'<b>Вопрос:</b>\n{html.escape(_clip(question))}\n\n'
             f'<b>Причина:</b> {html.escape(_clip(reason, 200))}'
             f'{draft_block}'
+        )
+
+    def operator_draft(self, ticket_id: int, *, question: str, draft: str, confidence: float, topic: str) -> None:
+        """Черновик в тикете, который ведёт человек: помощь оператору, а не ответ.
+
+        Тикет не наш и не эскалированный нами — просто предложение, которое
+        оператор вправе проигнорировать или вставить в свой ответ.
+        """
+        self._send(
+            f'✍️ <b>Черновик для оператора</b>\n'
+            f'Тикет #{ticket_id} ведёт человек · {html.escape(topic or "без темы")} · уверенность {confidence:.2f}\n\n'
+            f'<b>Вопрос:</b>\n{html.escape(_clip(question))}\n\n'
+            f'<b>Черновик для оператора:</b>\n<pre>{html.escape(_clip(draft, MAX_DRAFT))}</pre>'
         )
 
     def handed_over(self, ticket_id: int, *, escalated: bool) -> None:
@@ -85,7 +106,9 @@ class Notifier:
         """Нейтральное сообщение: проверка связи, а не событие по тикету."""
         self._send(f'🤖 <b>Сервис поддержки</b>\n{html.escape(_clip(text, 500))}')
 
-    def started(self, *, version: str, shadow: bool, model: str, poll_interval: int, kb_chars: int) -> None:
+    def started(
+        self, *, version: str, shadow: bool, model: str, poll_interval: int, kb_chars: int, assist: bool = False
+    ) -> None:
         """Сервис поднялся и готов разбирать тикеты.
 
         Перезапуск виден там же, где решения сервиса: иначе единственным
@@ -94,11 +117,12 @@ class Notifier:
         сейчас» — самый частый при разборе «почему клиенту не ответили».
         """
         mode = 'боевой — отвечаем клиентам' if not shadow else 'теневой — клиенту не пишем'
+        assist_note = '\nПомощь оператору в взятых им тикетах: включена' if assist else ''
         self._send(
             f'🟢 <b>Сервис поддержки запущен</b>\n'
             f'Версия {html.escape(version)} · режим {mode}\n'
             f'Модель {html.escape(model)} · опрос раз в {poll_interval} с\n'
-            f'База знаний: {kb_chars} символов'
+            f'База знаний: {kb_chars} символов{assist_note}'
         )
 
     def problem(self, text: str) -> None:
@@ -115,6 +139,8 @@ class Notifier:
         if digest.answered_shadow:
             lines.append(f'Черновиков (клиенту не ушли): {digest.answered_shadow}')
         lines.append(f'Передано операторам: {digest.escalated}')
+        if digest.assisted:
+            lines.append(f'Черновиков оператору: {digest.assisted}')
         if digest.handover:
             lines.append(f'Тикетов забрали люди: {digest.handover}')
         if digest.llm_errors:

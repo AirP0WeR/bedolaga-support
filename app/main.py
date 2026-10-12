@@ -74,9 +74,12 @@ class Service:
         state = self.store.state(ticket_id)
 
         # Из тикета, в который зашёл человек, мы вышли навсегда: решение уже
-        # принято, и перечитывать тикет каждый цикл незачем. Остальные проверки
-        # так дёшево не обойти — им нужны свежие данные.
+        # принято, и перечитывать тикет каждый цикл незачем. Исключение —
+        # включённая помощь оператору: тогда новые сообщения клиента стоят
+        # черновика, но и они не ведут ни к какой записи в тикет.
         if state.human_seen:
+            if self.cfg.human_assist:
+                self._assist_draft(ticket_id)
             return
 
         # Всегда перечитываем тикет целиком: списочный эндпоинт отдаёт
@@ -280,6 +283,77 @@ class Service:
         self.store.audit(ticket_id, 'handover', reason=reason)
         self.notifier.handed_over(ticket_id, escalated=not human)
 
+    def _assist_draft(self, ticket_id: int) -> None:
+        """Черновик для оператора в тикете, который ведёт человек.
+
+        Единственное действие — сообщение в топик наблюдения: клиенту не пишем,
+        приоритет не трогаем, тикет не меняем. Уверенность модели здесь не
+        порог, а подпись к черновику — решать оператору, и низкая уверенность
+        не повод прятать текст, который он вправе подправить.
+        """
+        ticket = self.api.ticket(ticket_id)
+
+        decision = gate.decide_human_assist(ticket, now=datetime.now(UTC), debounce_sec=self.cfg.debounce_sec)
+        if decision != gate.ASK_LLM:
+            return
+
+        messages = ticket.get('messages') or []
+        last_message_id = messages[-1]['id'] if messages else None
+
+        # То же правило, что и в основном пути: одно сообщение — один черновик.
+        if last_message_id is not None and self.store.last_decided_message_id(ticket_id) == last_message_id:
+            return
+
+        question = next(
+            (m.get('message_text') or '' for m in reversed(messages) if not m.get('is_from_admin')),
+            '',
+        )
+
+        self.kb.refresh()
+        payload = context_builder.build(self.api, ticket)
+
+        verdict = self.provider.decide(
+            knowledge=self.kb.text(),
+            context=payload,
+            confidence_threshold=self.cfg.confidence_threshold,
+            max_reply_chars=self.cfg.max_reply_chars,
+        )
+
+        if verdict.action == llm.ERROR:
+            log.warning('Тикет %s: модель недоступна, черновик оператору отложен', ticket_id)
+            self.store.audit(ticket_id, 'llm_error', question=question, reason=verdict.reason)
+            self.alerts.failure(LLM, verdict.reason, now=time.monotonic())
+            return
+
+        self.alerts.success(LLM, now=time.monotonic())
+
+        # Ответ и эскалация различаются только тем, в каком поле лежит текст:
+        # оператору годится любой — пост-фильтр отбраковывает тексты для
+        # клиента, а не для оператора.
+        draft = verdict.reply_text or verdict.draft_text
+
+        self.store.audit(
+            ticket_id,
+            'assist',
+            question=question,
+            reply=draft,
+            reason=verdict.reason,
+            confidence=verdict.confidence,
+            topic=verdict.topic,
+            model=self.provider.model,
+            usage=verdict.usage,
+        )
+        if draft:
+            self.notifier.operator_draft(
+                ticket_id,
+                question=question,
+                draft=draft,
+                confidence=verdict.confidence,
+                topic=verdict.topic,
+            )
+        self.store.set_last_decided(ticket_id, last_message_id)
+        log.info('Тикет %s: черновик для оператора', ticket_id)
+
     # --- цикл -------------------------------------------------------------
 
     def _maybe_digest(self) -> None:
@@ -343,6 +417,7 @@ class Service:
             model=self.provider.model,
             poll_interval=self.cfg.poll_interval,
             kb_chars=len(self.kb.text()),
+            assist=self.cfg.human_assist,
         )
 
     def run_once(self) -> None:

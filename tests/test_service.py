@@ -58,6 +58,9 @@ class FakeNotifier:
     def escalated(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('escalated')
 
+    def operator_draft(self, ticket_id: int, **kwargs) -> None:
+        self.sent.append('operator_draft')
+
     def handed_over(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('handed_over')
 
@@ -200,6 +203,56 @@ def test_тикет_с_человеком_не_читается_из_api(answer)
     service.handle(7)
 
     assert service.api.reads == 0
+
+
+# --- помощь оператору в взятых тикетах --------------------------------------
+
+
+def test_помощь_оператору_пишет_в_топик_и_не_трогает_тикет(answer):
+    """Клиенту не отвечаем, приоритет не поднимаем — только черновик в топик."""
+    service = build_service(config(human_assist=True), ticket_with_message_age(600), answer)
+    service.store.mark_human(7)
+
+    service.handle(7)
+
+    assert service.notifier.sent == ['operator_draft']
+    assert service.api.replies == []
+    assert service.api.priorities == []
+
+
+def test_черновик_оператору_считается_один_раз_на_сообщение(answer):
+    service = build_service(config(human_assist=True), ticket_with_message_age(600), answer)
+    service.store.mark_human(7)
+
+    service.handle(7)
+    service.handle(7)
+
+    assert service.provider.calls == 1
+
+
+def test_ошибка_модели_при_помощи_ждёт_следующего_цикла():
+    """Черновик не коммитится до успеха модели — попробуем снова, как основной путь."""
+    error = llm.Verdict(llm.ERROR, reason='модель недоступна')
+    service = build_service(config(human_assist=True), ticket_with_message_age(600), error)
+    service.store.mark_human(7)
+
+    service.handle(7)
+    service.handle(7)
+
+    assert service.provider.calls == 2
+    assert service.notifier.sent == []
+
+
+def test_эскалационный_вердикт_тоже_даёт_черновик_оператору():
+    """Деньги или низкая уверенность не прячут текст: оператору он всё равно нужен."""
+    verdict = llm.Verdict(llm.ESCALATE, draft_text='Соберу данные по платежу', reason='деньги', confidence=0.4)
+    service = build_service(config(human_assist=True), ticket_with_message_age(600), verdict)
+    service.store.mark_human(7)
+
+    service.handle(7)
+
+    assert service.notifier.sent == ['operator_draft']
+    assert service.api.priorities == []
 
 
 def test_обычный_тикет_по_прежнему_перечитывается(answer):

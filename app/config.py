@@ -72,6 +72,9 @@ class Config:
     reply_enabled: bool = field(default_factory=lambda: _bool('AI_REPLY_ENABLED', False))
     # Как модель называет сервис, от имени которого отвечает.
     brand_name: str = field(default_factory=lambda: os.environ.get('BRAND_NAME', ''))
+    # Помощь оператору: черновики на новые сообщения клиента в тикетах, которые
+    # взял человек. Клиенту при этом не пишем ничего.
+    human_assist: bool = field(default_factory=lambda: _bool('HUMAN_ASSIST_ENABLED', False))
 
     # Цикл
     poll_interval: int = field(default_factory=lambda: _int('POLL_INTERVAL_SEC', 60))

@@ -18,6 +18,7 @@ from app.gate import (
     SKIP,
     TicketState,
     decide,
+    decide_human_assist,
     has_human_admin_message,
 )
 
@@ -328,3 +329,47 @@ def test_при_пустом_состоянии_человек_не_опозна
     """
     msgs = [cab_msg(1), cab_msg(2, 'админское', admin=True)]
     assert has_human_admin_message(ticket(msgs), TicketState()) is False
+
+
+# --- помощь оператору в взятом тикете --------------------------------------
+
+
+def run_assist(t, now=NOW):
+    """Ворота для тикета, который уже ведёт человек: есть ли что предложить.
+
+    К моменту вызова human_seen гарантированно стоит — состояние сюда
+    не передаётся намеренно.
+    """
+    return decide_human_assist(t, now=now)
+
+
+def test_новый_вопрос_клиента_в_тикет_оператора_даёт_черновик():
+    msgs = [msg(1), msg(2, 'отвечаю руками', admin=True, user_id=ADMIN), msg(3, 'не помогло')]
+    assert run_assist(ticket(msgs)) == ASK_LLM
+
+
+def test_закрытый_тикет_оператора_не_трогаем():
+    msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN), msg(3, 'спасибо')]
+    assert run_assist(ticket(msgs, status='closed')) == SKIP
+
+
+def test_без_нового_вопроса_черновика_нет():
+    """Последнее слово за оператором — предлагать нечего."""
+    msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN)]
+    assert run_assist(ticket(msgs)) == SKIP
+
+
+def test_свежий_дописываемый_вопрос_ждёт():
+    msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN), msg(3, 'а если', age_sec=5)]
+    assert run_assist(ticket(msgs)) == DEFER
+
+
+def test_голосовое_в_вопросе_черновика_не_даёт():
+    """Модель голосовое не читает: черновик по нему был бы догадкой."""
+    msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN), msg(3, '', media='voice')]
+    assert run_assist(ticket(msgs)) == SKIP
+
+
+def test_скриншот_в_вопросе_даёт_черновик():
+    msgs = [msg(1), msg(2, 'руками', admin=True, user_id=ADMIN), msg(3, 'вот ошибка', media='photo')]
+    assert run_assist(ticket(msgs)) == ASK_LLM

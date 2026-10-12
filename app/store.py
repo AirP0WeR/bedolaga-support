@@ -24,6 +24,7 @@ class Digest:
     since: datetime
     answered: int = 0
     answered_shadow: int = 0
+    assisted: int = 0
     escalated: int = 0
     handover: int = 0
     llm_errors: int = 0
@@ -263,6 +264,7 @@ class Store:
             since=since,
             answered=counts.get(('answer', 0), 0),
             answered_shadow=counts.get(('answer', 1), 0),
+            assisted=counts.get(('assist', 0), 0),
             escalated=counts.get(('escalate', 0), 0),
             handover=counts.get(('handover', 0), 0),
             llm_errors=counts.get(('llm_error', 0), 0),

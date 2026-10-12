@@ -45,6 +45,8 @@ def _check_config(cfg: Config) -> Step:
     except RuntimeError as error:
         return Step('Настройки', FAIL, str(error))
     mode = 'боевой — клиенту отвечаем' if cfg.reply_enabled else 'теневой — клиенту не пишем'
+    if cfg.human_assist:
+        mode += ', черновики оператору включены'
     return Step('Настройки', OK, f'всё заполнено, режим {mode}')
 
 
