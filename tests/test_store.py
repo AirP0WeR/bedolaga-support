@@ -100,10 +100,50 @@ def test_черновики_оператору_считаются_отдельн
     store = Store(':memory:')
     store.audit(1, 'assist', question='не помогло', reply='черновик', topic='подключение')
     store.audit(2, 'escalate', reason='деньги')
+    store.audit(3, 'operator_send', reply='отправлено по кнопке')
 
     digest = store.counters(LONG_AGO)
 
-    assert (digest.assisted, digest.escalated, digest.answered) == (1, 1, 0)
+    assert (digest.assisted, digest.escalated, digest.answered, digest.sent_by_button) == (1, 1, 0, 1)
+
+
+# --- черновики с кнопкой ----------------------------------------------------
+
+
+def test_заявка_на_черновик_даётся_один_раз():
+    """Два нажатия — даже из двух потоков — не дадут двух отправок."""
+    store = Store(':memory:')
+    draft_id = store.save_draft(7, 'текст черновика')
+
+    assert store.claim_draft(draft_id) is True
+    assert store.claim_draft(draft_id) is False
+
+
+def test_несуществующий_черновик_не_занимается():
+    store = Store(':memory:')
+    assert store.draft(999) is None
+    assert store.claim_draft(999) is False
+
+
+def test_черновик_помнит_отправку():
+    store = Store(':memory:')
+    draft_id = store.save_draft(7, 'текст')
+
+    store.claim_draft(draft_id)
+
+    assert store.draft(draft_id).sent is True
+
+
+def test_чистка_убирает_и_старые_черновики(tmp_path):
+    store = Store(str(tmp_path / 'state.db'))
+    draft_id = store.save_draft(7, 'старый')
+    store._db.execute("UPDATE drafts SET created_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (draft_id,))
+    fresh_id = store.save_draft(7, 'свежий')
+
+    store.purge_audit(datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert store.draft(draft_id) is None
+    assert store.draft(fresh_id) is not None
 
 
 def test_сводка_считает_только_свой_период():

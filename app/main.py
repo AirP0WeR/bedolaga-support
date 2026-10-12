@@ -20,7 +20,9 @@ from . import context as context_builder
 from . import gate, llm, selfcheck, timeutil, version
 from .alerts import CYCLE, LLM, Alerts
 from .bedolaga import Bedolaga
+from .buttons import ButtonReceiver
 from .config import Config
+from .guard import build_guard
 from .kb import KnowledgeBase
 from .notify import Notifier
 from .store import Store
@@ -43,6 +45,8 @@ class Service:
         self.api = Bedolaga(cfg.bedolaga_url, cfg.bedolaga_token)
         self.store = Store(cfg.state_path)
         self.notifier = Notifier(bot_token=cfg.tg_bot_token, chat_id=cfg.tg_chat_id, topic_id=cfg.tg_topic_id)
+        # Тот же пост-фильтр, что у автоответов, — для решения, вешать ли кнопку.
+        self.guard = build_guard(cfg)
         self.kb = KnowledgeBase(
             self.api,
             kb_dir=cfg.kb_dir,
@@ -243,8 +247,24 @@ class Service:
         # Черновик кладём в ту же колонку `reply`, что и настоящие ответы: это
         # неотправленный клиенту вариант, для аудита достаточно одного поля.
         self.store.audit(ticket_id, 'escalate', question=question, reply=draft, reason=reason, topic=topic, usage=usage)
-        self.notifier.escalated(ticket_id, question=question, reason=reason, draft=draft)
+        self.notifier.escalated(
+            ticket_id, question=question, reason=reason, draft=draft, draft_id=self._draft_button(ticket_id, draft)
+        )
         log.info('Тикет %s: передан оператору (%s)', ticket_id, reason)
+
+    def _draft_button(self, ticket_id: int, text: str) -> int | None:
+        """Записать черновик под кнопку «Отправить клиенту». None — кнопки не будет.
+
+        Кнопка — это путь текста к клиенту без нового взгляда модели, поэтому
+        на неё имеет право только текст, прошедший тот же пост-фильтр, что и
+        автоответ: черновик со ссылкой вне списка или суммой оператор пусть
+        отправляет сам — копируя его руками, он принимает решение осознанно.
+        """
+        if not (self.cfg.send_button and self.notifier.enabled and text):
+            return None
+        if self.guard.reject(text):
+            return None
+        return self.store.save_draft(ticket_id, text)
 
     def _hand_over(self, ticket: dict) -> None:
         """Выход из тикета, в котором появилось чужое админское сообщение.
@@ -350,6 +370,7 @@ class Service:
                 draft=draft,
                 confidence=verdict.confidence,
                 topic=verdict.topic,
+                draft_id=self._draft_button(ticket_id, draft),
             )
         self.store.set_last_decided(ticket_id, last_message_id)
         log.info('Тикет %s: черновик для оператора', ticket_id)
@@ -438,6 +459,22 @@ class Service:
 
         self._announce_start()
 
+        receiver = None
+        if self.cfg.send_button and self.notifier.enabled:
+            receiver = ButtonReceiver(
+                bot_token=self.cfg.tg_bot_token,
+                api=self.api,
+                store_path=self.cfg.state_path,
+                guard=self.guard,
+            )
+            receiver.start()
+        try:
+            self._loop()
+        finally:
+            if receiver is not None:
+                receiver.stop()
+
+    def _loop(self) -> None:
         while not self._stopping:
             try:
                 self.run_once()

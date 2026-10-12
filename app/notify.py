@@ -28,6 +28,15 @@ def _clip(text: str, limit: int = MAX_FIELD) -> str:
     return text if len(text) <= limit else text[: limit - 1] + '…'
 
 
+def send_keyboard(draft_id: int) -> list[list[dict]]:
+    """Кнопка под черновиком: нажатие отправляет текст в тикет.
+
+    Идентификатор — id записи в `drafts`: callback_data ограничен 64 байтами,
+    а текст черновика в него всё равно не влез бы.
+    """
+    return [[{'text': 'Отправить клиенту', 'callback_data': f'd:{draft_id}'}]]
+
+
 class Notifier:
     def __init__(self, *, bot_token: str, chat_id: str, topic_id: str = '', timeout: float = 15.0):
         self._token = bot_token
@@ -42,7 +51,7 @@ class Notifier:
     def close(self) -> None:
         self._http.close()
 
-    def _send(self, text: str) -> None:
+    def _send(self, text: str, keyboard: list[list[dict]] | None = None) -> None:
         if not self.enabled:
             return
         payload = {
@@ -51,6 +60,8 @@ class Notifier:
             'parse_mode': 'HTML',
             'disable_web_page_preview': True,
         }
+        if keyboard:
+            payload['reply_markup'] = {'inline_keyboard': keyboard}
         if self._topic_id:
             payload['message_thread_id'] = self._topic_id
         try:
@@ -71,7 +82,9 @@ class Notifier:
             f'<b>Ответ:</b>\n{html.escape(_clip(reply))}'
         )
 
-    def escalated(self, ticket_id: int, *, question: str, reason: str, draft: str = '') -> None:
+    def escalated(
+        self, ticket_id: int, *, question: str, reason: str, draft: str = '', draft_id: int | None = None
+    ) -> None:
         # Черновик в <pre>: моно-блок в Telegram копируется одним нажатием,
         # и оператору не приходится выделять текст пальцем по абзацу.
         draft_block = (
@@ -82,20 +95,24 @@ class Notifier:
             f'Тикет #{ticket_id} · приоритет high\n\n'
             f'<b>Вопрос:</b>\n{html.escape(_clip(question))}\n\n'
             f'<b>Причина:</b> {html.escape(_clip(reason, 200))}'
-            f'{draft_block}'
+            f'{draft_block}',
+            keyboard=send_keyboard(draft_id) if draft_id else None,
         )
 
-    def operator_draft(self, ticket_id: int, *, question: str, draft: str, confidence: float, topic: str) -> None:
+    def operator_draft(
+        self, ticket_id: int, *, question: str, draft: str, confidence: float, topic: str, draft_id: int | None = None
+    ) -> None:
         """Черновик в тикете, который ведёт человек: помощь оператору, а не ответ.
 
         Тикет не наш и не эскалированный нами — просто предложение, которое
-        оператор вправе проигнорировать или вставить в свой ответ.
+        оператор вправе проигнорировать или отправить одной кнопкой.
         """
         self._send(
             f'✍️ <b>Черновик для оператора</b>\n'
             f'Тикет #{ticket_id} ведёт человек · {html.escape(topic or "без темы")} · уверенность {confidence:.2f}\n\n'
             f'<b>Вопрос:</b>\n{html.escape(_clip(question))}\n\n'
-            f'<b>Черновик для оператора:</b>\n<pre>{html.escape(_clip(draft, MAX_DRAFT))}</pre>'
+            f'<b>Черновик для оператора:</b>\n<pre>{html.escape(_clip(draft, MAX_DRAFT))}</pre>',
+            keyboard=send_keyboard(draft_id) if draft_id else None,
         )
 
     def handed_over(self, ticket_id: int, *, escalated: bool) -> None:
@@ -138,6 +155,8 @@ class Notifier:
         ]
         if digest.answered_shadow:
             lines.append(f'Черновиков (клиенту не ушли): {digest.answered_shadow}')
+        if digest.sent_by_button:
+            lines.append(f'Отправлено по кнопке оператора: {digest.sent_by_button}')
         lines.append(f'Передано операторам: {digest.escalated}')
         if digest.assisted:
             lines.append(f'Черновиков оператору: {digest.assisted}')

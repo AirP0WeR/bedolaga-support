@@ -18,6 +18,16 @@ from .llm import Usage
 
 
 @dataclass(frozen=True)
+class Draft:
+    """Черновик, на который в топике висит кнопка «Отправить клиенту»."""
+
+    id: int
+    ticket_id: int
+    text: str
+    sent: bool
+
+
+@dataclass(frozen=True)
 class Digest:
     """Что сервис сделал за период. Пустой — тоже осмысленный ответ."""
 
@@ -28,6 +38,7 @@ class Digest:
     escalated: int = 0
     handover: int = 0
     llm_errors: int = 0
+    sent_by_button: int = 0
     avg_confidence: float | None = None
     topics: tuple[tuple[str, int], ...] = field(default_factory=tuple)
     prompt_tokens: int = 0
@@ -60,8 +71,17 @@ CREATE TABLE IF NOT EXISTS audit (
     shadow      INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS drafts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id  INTEGER NOT NULL,
+    text       TEXT    NOT NULL,
+    created_at TEXT    NOT NULL,
+    sent_at    TEXT
+);
+
 CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
 CREATE INDEX IF NOT EXISTS audit_ticket ON audit (ticket_id);
+CREATE INDEX IF NOT EXISTS drafts_ticket ON drafts (ticket_id);
 """
 
 # Колонки, добавленные после первого релиза. База переживает пересоздание
@@ -177,6 +197,35 @@ class Store:
             (_now(), ticket_id),
         )
 
+    # --- черновики с кнопкой ----------------------------------------------
+
+    def save_draft(self, ticket_id: int, text: str) -> int:
+        """Запомнить черновик, на который вешается кнопка. id уходит в callback_data."""
+        cursor = self._db.execute(
+            'INSERT INTO drafts (ticket_id, text, created_at) VALUES (?, ?, ?)',
+            (ticket_id, text, _now()),
+        )
+        return cursor.lastrowid
+
+    def draft(self, draft_id: int) -> Draft | None:
+        row = self._db.execute('SELECT * FROM drafts WHERE id = ?', (draft_id,)).fetchone()
+        if row is None:
+            return None
+        return Draft(id=row['id'], ticket_id=row['ticket_id'], text=row['text'], sent=bool(row['sent_at']))
+
+    def claim_draft(self, draft_id: int) -> bool:
+        """Занять черновик за нажатием кнопки. True — нажатие первое.
+
+        Заявка атомарна на уровне SQLite (UPDATE с условием на NULL), поэтому
+        два одновременных нажатия — из двух потоков или после перезапуска —
+        не превратятся в два ответа клиенту: выигрывает ровно одно.
+        """
+        cursor = self._db.execute(
+            'UPDATE drafts SET sent_at = ? WHERE id = ? AND sent_at IS NULL',
+            (_now(), draft_id),
+        )
+        return cursor.rowcount == 1
+
     # --- аудит ------------------------------------------------------------
 
     def audit(
@@ -226,6 +275,12 @@ class Store:
             'DELETE FROM audit WHERE ts < ?',
             (older_than.astimezone(UTC).isoformat(),),
         ).rowcount
+        # Кнопки живут на сообщениях Telegram, которые можно редактировать
+        # лишь двое суток, — черновикам старше ретеншена ничего не светит.
+        self._db.execute(
+            'DELETE FROM drafts WHERE created_at < ?',
+            (older_than.astimezone(UTC).isoformat(),),
+        )
         if deleted:
             # Файл иначе не отдаёт место обратно, а база лежит на том же
             # томе, что и состояние.
@@ -268,6 +323,7 @@ class Store:
             escalated=counts.get(('escalate', 0), 0),
             handover=counts.get(('handover', 0), 0),
             llm_errors=counts.get(('llm_error', 0), 0),
+            sent_by_button=counts.get(('operator_send', 0), 0),
             avg_confidence=confidence,
             topics=tuple((row['topic'], row['n']) for row in topics),
             prompt_tokens=tokens['prompt'],

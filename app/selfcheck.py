@@ -44,9 +44,13 @@ def _check_config(cfg: Config) -> Step:
         cfg.require()
     except RuntimeError as error:
         return Step('Настройки', FAIL, str(error))
+    if cfg.send_button and not (cfg.tg_bot_token and cfg.tg_chat_id):
+        return Step('Настройки', FAIL, 'DRAFT_SEND_BUTTON=true требует TG_BOT_TOKEN и TG_CHAT_ID')
     mode = 'боевой — клиенту отвечаем' if cfg.reply_enabled else 'теневой — клиенту не пишем'
     if cfg.human_assist:
         mode += ', черновики оператору включены'
+    if cfg.send_button:
+        mode += ', кнопка отправки включена'
     return Step('Настройки', OK, f'всё заполнено, режим {mode}')
 
 

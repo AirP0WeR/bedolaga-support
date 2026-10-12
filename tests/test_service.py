@@ -14,6 +14,7 @@ import pytest
 from app import llm
 from app.alerts import Alerts
 from app.config import Config
+from app.guard import build_guard
 from app.main import Service
 from app.store import Store
 
@@ -49,17 +50,23 @@ class FakeKb:
 
 
 class FakeNotifier:
+    # Главный цикл спрашивает уведомитель о настроенности перед кнопкой.
+    enabled = True
+
     def __init__(self):
         self.sent: list[str] = []
+        self.kwargs: dict[str, dict] = {}
 
     def answered(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('answered')
 
     def escalated(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('escalated')
+        self.kwargs['escalated'] = kwargs
 
     def operator_draft(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('operator_draft')
+        self.kwargs['operator_draft'] = kwargs
 
     def handed_over(self, ticket_id: int, **kwargs) -> None:
         self.sent.append('handed_over')
@@ -117,6 +124,7 @@ def build_service(cfg: Config, ticket: dict, verdict: llm.Verdict) -> Service:
     service.notifier = FakeNotifier()
     service.kb = FakeKb()
     service.provider = FakeProvider(verdict)
+    service.guard = build_guard(cfg)
     service.alerts = Alerts(service.notifier, after_failures=3, cooldown_sec=3600)
     service._digest_at = None
     service._stopping = False
@@ -253,6 +261,53 @@ def test_эскалационный_вердикт_тоже_даёт_черно�
 
     assert service.notifier.sent == ['operator_draft']
     assert service.api.priorities == []
+
+
+# --- кнопка «Отправить клиенту» ---------------------------------------------
+
+
+def test_черновик_оператора_получает_кнопку(answer):
+    """Кнопке нужен id в базе: по нему нажатие найдёт и тикет, и текст."""
+    service = build_service(config(send_button=True, human_assist=True), ticket_with_message_age(600), answer)
+    service.store.mark_human(7)
+
+    service.handle(7)
+
+    draft_id = service.notifier.kwargs['operator_draft']['draft_id']
+    assert isinstance(draft_id, int)
+    assert service.store.draft(draft_id).text == 'Откройте бота и нажмите «Подключиться».'
+
+
+def test_без_флага_кнопки_нет(answer):
+    """Выключенный флаг не меняет поведение 0.4.0: черновик без кнопки."""
+    service = build_service(config(human_assist=True), ticket_with_message_age(600), answer)
+    service.store.mark_human(7)
+
+    service.handle(7)
+
+    assert service.notifier.kwargs['operator_draft']['draft_id'] is None
+
+
+def test_текст_не_прошедший_постфильтр_кнопки_не_получает():
+    """Черновик с суммой остаётся копируемым, но кнопки на нём быть не может:
+    она отправила бы клиенту то, что автоответу запретил бы пост-фильтр.
+    """
+    verdict = llm.Verdict(llm.ESCALATE, draft_text='Вернём 300 руб на баланс', reason='деньги')
+    service = build_service(config(send_button=True), ticket_with_message_age(600), verdict)
+
+    service.handle(7)
+
+    assert service.notifier.sent == ['escalated']
+    assert service.notifier.kwargs['escalated']['draft_id'] is None
+
+
+def test_эскалация_с_чистым_черновиком_получает_кнопку():
+    verdict = llm.Verdict(llm.ESCALATE, draft_text='Проверю зачисление вручную', reason='деньги')
+    service = build_service(config(send_button=True), ticket_with_message_age(600), verdict)
+
+    service.handle(7)
+
+    assert isinstance(service.notifier.kwargs['escalated']['draft_id'], int)
 
 
 def test_обычный_тикет_по_прежнему_перечитывается(answer):

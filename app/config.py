@@ -75,6 +75,9 @@ class Config:
     # Помощь оператору: черновики на новые сообщения клиента в тикетах, которые
     # взял человек. Клиенту при этом не пишем ничего.
     human_assist: bool = field(default_factory=lambda: _bool('HUMAN_ASSIST_ENABLED', False))
+    # Кнопка «Отправить клиенту» на черновиках в топике: нажатие отправляет
+    # текст в тикет от имени поддержки. Требует настроенного наблюдения.
+    send_button: bool = field(default_factory=lambda: _bool('DRAFT_SEND_BUTTON', False))
 
     # Цикл
     poll_interval: int = field(default_factory=lambda: _int('POLL_INTERVAL_SEC', 60))
